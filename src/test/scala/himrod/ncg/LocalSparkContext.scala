@@ -3,7 +3,7 @@
  * =================================================
  * License: GPL 3
  * Creation Date: Thu 23 Jul 2015 11:04:31 AM EDT
- * Last Modified: Tue 20 Oct 2015 06:43:15 PM EDT
+ * Last Modified: Wed 21 Oct 2015 12:41:48 PM EDT
  * =================================================
  */
 package himrod.ncg
@@ -18,7 +18,8 @@ trait LocalSparkContext extends BeforeAndAfterAll {self: Suite =>
 		val conf = new SparkConf()
       .setMaster("local")
       .setAppName("himrod.ncg.test")
-      /*.set("spark.local.dir","/tmp")*/
+      .set("spark.checkpoint.dir","/tmp")
+      .set("spark.local.dir","/tmp")
 		sc = new SparkContext(conf)
 		super.beforeAll()
 	}

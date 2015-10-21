@@ -1,18 +1,5 @@
 /*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
- *
- *    http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Test suite for PNCG/ALS methods
  */
 
 package himrod.ncg
@@ -21,19 +8,15 @@ import scala.collection.JavaConversions._
 import scala.math.abs
 import scala.util.Random
 
-import org.jblas.DoubleMatrix
-
-import org.scalatest.FunSuite
-/*import org.apache.spark.SparkContext*/
-/*import org.apache.spark.SparkContext._*/
-/*import org.apache.spark.SparkConf*/
-
 import org.apache.log4j.Logger
 import org.apache.log4j.Level
 
-/*import org.apache.spark.SparkFunSuite*/
-/*import org.apache.spark.mllib.util.MLlibTestSparkContext*/
-/*import org.apache.spark.storage.StorageLevel*/
+import org.apache.spark.rdd.RDD
+import org.apache.spark.mllib.recommendation.MatrixFactorizationModel
+
+import org.jblas.DoubleMatrix
+
+import org.scalatest.FunSuite
 
 object NCGSuite {
 
@@ -96,48 +79,41 @@ class NCGSuite extends FunSuite with LocalSparkContext {
 /*class PNCGSuite extends SparkFunSuite with MLlibTestSparkContext {*/
     /*val (users,items) = PNCG.train(sampledRatings,features,10,10,iterations,0.01,implicitPrefs,1.0,false)*/
 
-  test("ALS-NCG, f=10"){
-    val users = 100
-    val products = 100
-    val features = 10
-    val samplingRate = 0.5
-    val implicitPrefs = false
-    val negativeWeights = false
-    val negativeFactors = false
-    val iters = 10
+  val regParam = 1e-3
+  val threshold = 0.1
+  val users = 500
+  val products = 100
+  val rank = 10
+  val samplingRate = 1.0
+  val implicitPrefs = false
+  val negativeWeights = false
+  val negativeFactors = true
+  val iters = 20
+  /*val (sampledRatings, trueRatings, truePrefs) = NCGSuite.generateRatings(users, products,*/
+  /*    rank, samplingRate, implicitPrefs, negativeWeights, negativeFactors)*/
+  /*val R = sc.parallelize(sampledRatings)*/
+
+  test("Testing ALS-NCG"){
     val (sampledRatings, trueRatings, truePrefs) = NCGSuite.generateRatings(users, products,
-        features, samplingRate, implicitPrefs, negativeWeights, negativeFactors)
+        rank, samplingRate, implicitPrefs, negativeWeights, negativeFactors)
     val R = sc.parallelize(sampledRatings)
-    NCG.trainPNCG(R,features,maxIter=iters)
+    val (userFactors,itemFactors) = NCG.trainPNCG(R,rank,maxIter=iters,regParam=regParam)
+    testRMSE(rank,trueRatings,truePrefs,userFactors,itemFactors,threshold,implicitPrefs)
   }
-  test("ALS, f=10"){
-    val users = 100
-    val products = 100
-    val features = 10
-    val samplingRate = 0.5
-    val implicitPrefs = false
-    val negativeWeights = false
-    val negativeFactors = false
-    val iters = 10
+  test("Testing ALS"){
     val (sampledRatings, trueRatings, truePrefs) = NCGSuite.generateRatings(users, products,
-        features, samplingRate, implicitPrefs, negativeWeights, negativeFactors)
+        rank, samplingRate, implicitPrefs, negativeWeights, negativeFactors)
     val R = sc.parallelize(sampledRatings)
-    NCG.trainALS(R,features,maxIter=iters)
+    val (userFactors,itemFactors) = NCG.trainALS(R,rank,maxIter=iters,regParam=regParam)
+    testRMSE(rank,trueRatings,truePrefs,userFactors,itemFactors,threshold,implicitPrefs)
   }
-  test("NCG, f=10"){
-    val users = 100
-    val products = 100
-    val features = 10
-    val samplingRate = 0.5
-    val implicitPrefs = false
-    val negativeWeights = false
-    val negativeFactors = false
-    val iters = 10
-    val (sampledRatings, trueRatings, truePrefs) = NCGSuite.generateRatings(users, products,
-        features, samplingRate, implicitPrefs, negativeWeights, negativeFactors)
-    val R = sc.parallelize(sampledRatings)
-    NCG.trainNCG(R,features,maxIter=iters)
-  }
+  /*test("NCG, f=10"){*/
+  /*  val (sampledRatings, trueRatings, truePrefs) = NCGSuite.generateRatings(users, products,*/
+  /*      rank, samplingRate, implicitPrefs, negativeWeights, negativeFactors)*/
+  /*  val R = sc.parallelize(sampledRatings)*/
+  /*  val (userFactors,itemFactors) = NCG.trainNCG(R,rank,maxIter=iters,regParam=regParam)*/
+  /*  testRMSE(rank,trueRatings,truePrefs,userFactors,itemFactors,threshold,implicitPrefs)*/
+  /*}*/
 
   /*test("rank-1 matrices") {*/
   /*  testPNCG(50, 100, 1, 15, 0.7, 0.3)*/
@@ -257,91 +233,111 @@ class NCGSuite extends FunSuite with LocalSparkContext {
    * @param negativeFactors whether the generated user/product factors can have negative entries
    */
   // scalastyle:off
-/*  def testPNCG(*/
-/*      users: Int,*/
-/*      products: Int,*/
-/*      features: Int,*/
-/*      iterations: Int,*/
-/*      samplingRate: Double,*/
-/*      matchThreshold: Double,*/
-/*      implicitPrefs: Boolean = false,*/
-/*      bulkPredict: Boolean = false,*/
-/*      negativeWeights: Boolean = false,*/
-/*      numUserBlocks: Int = -1,*/
-/*      numProductBlocks: Int = -1,*/
-/*      negativeFactors: Boolean = true) {*/
-/*    // scalastyle:on*/
+  /*def runTest(*/
+  /*    users: Int,*/
+  /*    products: Int,*/
+  /*    features: Int,*/
+  /*    iterations: Int,*/
+  /*    samplingRate: Double,*/
+  /*    matchThreshold: Double,*/
+  /*    implicitPrefs: Boolean = false,*/
+  /*    bulkPredict: Boolean = false,*/
+  /*    negativeWeights: Boolean = false,*/
+  /*    numUserBlocks: Int = -1,*/
+  /*    numProductBlocks: Int = -1,*/
+  /*    negativeFactors: Boolean = true) {*/
+    // scalastyle:on
+
+    /*val (sampledRatings, trueRatings, truePrefs) = PNCGSuite.generateRatings(users, products,*/
+      /*features, samplingRate, implicitPrefs, negativeWeights, negativeFactors)*/
+    /*val (users,items) = PNCG.train(sampledRatings,features,10,10,iterations,0.01,implicitPrefs,1.0,false)*/
+    /*val R = sc.parallelize(sampledRatings)*/
+    /*val (userFactors,itemFactors) = PNCG.train(R,features,maxIter=iterations) //0.01,implicitPrefs,1.0,false)*/
+
+    /*val model = new PNCG()*/
+    /*  .setUserBlocks(numUserBlocks)*/
+    /*  .setProductBlocks(numProductBlocks)*/
+    /*  .setRank(features)*/
+    /*  .setIterations(iterations)*/
+    /*  .setAlpha(1.0)*/
+    /*  .setImplicitPrefs(implicitPrefs)*/
+    /*  .setLambda(0.01)*/
+    /*  .setSeed(0L)*/
+    /*  .setNonnegative(!negativeFactors)*/
+    /*  .run(sc.parallelize(sampledRatings))*/
 /**/
-/*    /*val (sampledRatings, trueRatings, truePrefs) = PNCGSuite.generateRatings(users, products,*/*/
-/*    /*  features, samplingRate, implicitPrefs, negativeWeights, negativeFactors)*/*/
-/*    /*val (users,items) = PNCG.train(sampledRatings,features,10,10,iterations,0.01,implicitPrefs,1.0,false)*/*/
-/*    /*val R = sc.parallelize(sampledRatings)*/*/
-/*    /*val (userFactors,itemFactors) = PNCG.train(R,features,maxIter=iterations) //0.01,implicitPrefs,1.0,false)*/*/
-/**/
-/*    /*val model = new PNCG()*/*/
-/*    /*  .setUserBlocks(numUserBlocks)*/*/
-/*    /*  .setProductBlocks(numProductBlocks)*/*/
-/*    /*  .setRank(features)*/*/
-/*    /*  .setIterations(iterations)*/*/
-/*    /*  .setAlpha(1.0)*/*/
-/*    /*  .setImplicitPrefs(implicitPrefs)*/*/
-/*    /*  .setLambda(0.01)*/*/
-/*    /*  .setSeed(0L)*/*/
-/*    /*  .setNonnegative(!negativeFactors)*/*/
-/*    /*  .run(sc.parallelize(sampledRatings))*/*/
-/*/**/*/
-/*/*    */*/
-/*/*    val predictedU = new DoubleMatrix(users, features)*/*/
-/*/*    for ((u, vec) <- model.userFeatures.collect(); i <- 0 until features) {*/*/
-/*/*      predictedU.put(u, i, vec(i))*/*/
-/*/*    }*/*/
-/*/*    val predictedP = new DoubleMatrix(products, features)*/*/
-/*/*    for ((p, vec) <- model.productFeatures.collect(); i <- 0 until features) {*/*/
-/*/*      predictedP.put(p, i, vec(i))*/*/
-/*/*    }*/*/
-/*/*    val predictedRatings = bulkPredict match {*/*/
-/*/*      case false => predictedU.mmul(predictedP.transpose)*/*/
-/*/*      case true =>*/*/
-/*/*        val allRatings = new DoubleMatrix(users, products)*/*/
-/*/*        val usersProducts = for (u <- 0 until users; p <- 0 until products) yield (u, p)*/*/
-/*/*        val userProductsRDD = sc.parallelize(usersProducts)*/*/
-/*/*        model.predict(userProductsRDD).collect().foreach { elem =>*/*/
-/*/*          allRatings.put(elem.user, elem.product, elem.rating)*/*/
-/*/*        }*/*/
-/*/*        allRatings*/*/
-/*/*    }*/*/
-/*/**/*/
-/*/*    if (!implicitPrefs) {*/*/
-/*/*      for (u <- 0 until users; p <- 0 until products) {*/*/
-/*/*        val prediction = predictedRatings.get(u, p)*/*/
-/*/*        val correct = trueRatings.get(u, p)*/*/
-/*/*        if (math.abs(prediction - correct) > matchThreshold) {*/*/
-/*/*          fail(("Model failed to predict (%d, %d): %f vs %f\ncorr: %s")*/*/
-/*/*            .format(u, p, correct, prediction))*/*/
-/*/*          /*fail(("Model failed to predict (%d, %d): %f vs %f\ncorr: %s\npred: %s\nU: %s\n P: %s")*/*/*/
-/*/*          /*  .format(u, p, correct, prediction, trueRatings, predictedRatings, predictedU,*/*/*/
-/*/*              /*predictedP))*/*/*/
-/*/*        }*/*/
-/*/*      }*/*/
-/*/*    } else {*/*/
-/*/*      // For implicit prefs we use the confidence-weighted RMSE to test (ref Mahout's tests)*/*/
-/*/*      var sqErr = 0.0*/*/
-/*/*      var denom = 0.0*/*/
-/*/*      for (u <- 0 until users; p <- 0 until products) {*/*/
-/*/*        val prediction = predictedRatings.get(u, p)*/*/
-/*/*        val truePref = truePrefs.get(u, p)*/*/
-/*/*        val confidence = 1 + 1.0 * abs(trueRatings.get(u, p))*/*/
-/*/*        val err = confidence * (truePref - prediction) * (truePref - prediction)*/*/
-/*/*        sqErr += err*/*/
-/*/*        denom += confidence*/*/
-/*/*      }*/*/
-/*/*      val rmse = math.sqrt(sqErr / denom)*/*/
-/*/*      if (rmse > matchThreshold) {*/*/
-/*/*        /*fail("Model failed to predict RMSE: %f\ncorr: %s\npred: %s\nU: %s\n P: %s".format(*/*/*/
-/*/*        /*  rmse, truePrefs, predictedRatings, predictedU, predictedP))*/*/*/
-/*/*        fail("Model failed to predict RMSE: %f".format(rmse))*/*/
-/*/*      }*/*/
-/*/*    }*/*/
-/*  }*/
+/*    */
+  def testRMSE(
+    rank: Int,
+    trueRatings: DoubleMatrix,
+    truePrefs: DoubleMatrix,
+    userFactors: RDD[(Int, Array[Float])],
+    itemFactors: RDD[(Int, Array[Float])],
+    threshold: Double = 0.1,
+    implicitPrefs: Boolean = false) = 
+  {
+    val model = new MatrixFactorizationModel(rank, 
+      userFactors.mapValues{a => a.map{x => x.toDouble}}, 
+      itemFactors.mapValues{a => a.map{x => x.toDouble}}
+    )
+    val users = userFactors.values.map{a => a.size / rank}.reduce{_+_}
+    val products = itemFactors.values.map{a => a.size / rank}.reduce{_+_}
+
+    val predictedU = new DoubleMatrix(users, rank)
+    for ((u, vec) <- model.userFeatures.collect(); i <- 0 until rank) {
+      predictedU.put(u, i, vec(i))
+    }
+    val predictedP = new DoubleMatrix(products, rank)
+    for ((p, vec) <- model.productFeatures.collect(); i <- 0 until rank) {
+      predictedP.put(p, i, vec(i))
+    }
+    val predictedRatings = {
+      val allRatings = new DoubleMatrix(users, products)
+      val usersProducts = for (u <- 0 until users; p <- 0 until products) yield (u, p)
+      val userProductsRDD = sc.parallelize(usersProducts)
+      model.predict(userProductsRDD).collect().foreach { elem =>
+        allRatings.put(elem.user, elem.product, elem.rating)
+      }
+      allRatings
+    }
+
+    if (!implicitPrefs) {
+      var sse = 0.0
+      for (u <- 0 until users; p <- 0 until products) {
+        val prediction = predictedRatings.get(u, p)
+        val correct = trueRatings.get(u, p)
+        val diff = (prediction - correct)
+        sse += diff * diff
+        /*println(s"R_($u,$p) = $correct; predicted $prediction")*/
+        if (math.abs(prediction - correct) > threshold) {
+          fail(s"Model failed on: R_($u,$p) = $correct; predicted $prediction")
+          /*fail(("Model failed to predict (%d, %d): %f vs %f\ncorr")*/
+          /*  .format(u, p, correct, prediction))*/
+          /*fail(("Model failed to predict (%d, %d): %f vs %f\ncorr: %s\npred: %s\nU: %s\n P: %s")*/
+          /*  .format(u, p, correct, prediction, trueRatings, predictedRatings, predictedU,*/
+              /*predictedP))*/
+        }
+      }
+      println(s"rmse: ${math.sqrt(1.0/(users*products) * sse)}")
+    } else {
+      // For implicit prefs we use the confidence-weighted RMSE to test (ref Mahout's tests)
+      var sqErr = 0.0
+      var denom = 0.0
+      for (u <- 0 until users; p <- 0 until products) {
+        val prediction = predictedRatings.get(u, p)
+        val truePref = truePrefs.get(u, p)
+        val confidence = 1 + 1.0 * abs(trueRatings.get(u, p))
+        val err = confidence * (truePref - prediction) * (truePref - prediction)
+        sqErr += err
+        denom += confidence
+      }
+      val rmse = math.sqrt(sqErr / denom)
+      if (rmse > threshold) {
+        /*fail("Model failed to predict RMSE: %f\ncorr: %s\npred: %s\nU: %s\n P: %s".format(*/
+        /*  rmse, truePrefs, predictedRatings, predictedU, predictedP))*/
+        fail(s"Model failed to predict RMSE: $rmse")
+      }
+    }
+  }
 }
 

@@ -762,6 +762,7 @@ object NCG extends Logging {
 
   private class PolynomialMinimizer(funcCoeffs: Array[Float]) 
   {
+    val VERBOSE = false
     val degree = funcCoeffs.length - 1
     val gradCoeffs = funcCoeffs.zipWithIndex.tail.map{case (c,n) => n*c}
     val hessCoeffs = gradCoeffs.zipWithIndex.tail.map{case (c,n) => n*c}
@@ -812,12 +813,12 @@ object NCG extends Logging {
       var x = x0;
       var g = grad(x)
       var k = 1;
-      /*logStdout(s"Rootfinder: $k: $x: $g: ${func(x)}")*/
+      if (VERBOSE) logStdout(s"Rootfinder: $k: $x: $g: ${func(x)}")
       while ((math.abs(g) > tol) && (k <= maxIters)) {
         g = grad(x)
         x -= g / hess(x)
         k += 1
-        logStdout(s"Rootfinder: $k: $x: $g: ${func(x)}")
+        if (VERBOSE) logStdout(s"Rootfinder: $k: $x: $g: ${func(x)}")
       }
       (x,func(x))
     }
@@ -826,7 +827,7 @@ object NCG extends Logging {
     {
       val str = new StringBuilder(10 * xs.length)
       funcCoeffs.foreach{x => str.append(x.toString + ",")}
-      logStdout(s"PolynomialMinimizer: coeff: ${str.mkString}")
+      if (VERBOSE) logStdout(s"PolynomialMinimizer: coeff: ${str.mkString}")
       /*str.clear*/
       /*stepSizes.foreach{x => str.append(x.toString + ",")}*/
       /*logStdout(s"minimize: stepsizes for minima: ${str.mkString}")*/
@@ -855,7 +856,7 @@ object NCG extends Logging {
       numUserBlocks: Int = 10,
       numItemBlocks: Int = 10,
       maxIter: Int = 10,
-      regParam: Double = 1.0,
+      regParam: Double = 1e-2,
       implicitPrefs: Boolean = false,
       alpha: Double = 1.0,
       nonnegative: Boolean = false,
@@ -1081,7 +1082,7 @@ object NCG extends Logging {
       coeff(2) += 2*(pp_user + pp_item)
 
       // this coefficient doesn't actually matter; easier to read if set to zero
-      coeff(0) = 0
+      /*coeff(0) = 0*/
       val polyMin = new PolynomialMinimizer(coeff)
       // find the best minimum near both 0, and some alpha0
       // typical values for alpha are in [0,2]
@@ -1124,7 +1125,7 @@ object NCG extends Logging {
     var beta_pncg: Float = gradTgrad
     var alpha_pncg: Float = alpha0
 
-    logStdout(s"PNCG: 0: $alpha_pncg: $beta_pncg: ${1/dof*math.sqrt(rddNORMSQR(gradUser)+rddNORMSQR(gradItem))}: ${costFunc((users,items))}")
+    /*logStdout(s"PNCG: 0: $alpha_pncg: $beta_pncg: ${1/dof*math.sqrt(rddNORMSQR(gradUser)+rddNORMSQR(gradItem))}: ${costFunc((users,items))}")*/
     for (iter <- 1 to maxIter) 
     {
       val (step,loss) = computeAlpha(users,items,direcUser,direcItem,gradUser,gradItem,
@@ -1142,8 +1143,9 @@ object NCG extends Logging {
       /*logStdout(s"PNCG: updated items with ${items.count} partitions")*/
 
       /*if (sc.checkpointDir.isDefined && (iter % checkpointInterval == 0))*/
-      if (iter % checkpointInterval == 0)
-      {
+      if (shouldCheckpoint(iter)) {
+      /*if (iter % checkpointInterval == 0)*/
+      /*{*/
         logStdout(s"PNCG: Checkpointing users/items at iter $iter")
         users.checkpoint()
         items.checkpoint()
@@ -1207,8 +1209,9 @@ object NCG extends Logging {
       }.cache
 
       /*if (sc.checkpointDir.isDefined && (iter % checkpointInterval == 0))*/
-      if (iter % checkpointInterval == 0)
-      {
+      if (shouldCheckpoint(iter)) {
+      /*if (iter % checkpointInterval == 0)*/
+      /*{*/
         logStdout(s"PNCG: Checkpointing users/item directionss at iter $iter")
         direcUser.checkpoint()
         direcItem.checkpoint()
@@ -1234,7 +1237,8 @@ object NCG extends Logging {
       /*gradUser_pc_old.count*/
       /*gradItem_pc_old.count*/
 
-      logStdout(s"PNCG: $iter: $alpha_pncg: $beta_pncg: ${1/dof * math.sqrt(rddNORMSQR(gradUser)+rddNORMSQR(gradItem))}: ${costFunc((users,items))}")
+      /*logStdout(s"PNCG: $iter: $alpha_pncg: $beta_pncg: ${1/dof * math.sqrt(rddNORMSQR(gradUser)+rddNORMSQR(gradItem))}: ${costFunc((users,items))}")*/
+      logStdout(s"PNCG: $iter: $alpha_pncg: $beta_pncg: ${1/dof * math.sqrt(rddNORMSQR(gradUser)+rddNORMSQR(gradItem))}: ${loss}")
     }
     
     val userIdAndFactors = userInBlocks
@@ -1283,7 +1287,7 @@ object NCG extends Logging {
       numUserBlocks: Int = 10,
       numItemBlocks: Int = 10,
       maxIter: Int = 10,
-      regParam: Double = 1.0,
+      regParam: Double = 1e-2,
       implicitPrefs: Boolean = false,
       alpha: Double = 1.0,
       nonnegative: Boolean = false,
@@ -1483,7 +1487,7 @@ object NCG extends Logging {
       coeff(2) += 2*(pp_user + pp_item)
 
       // this coefficient doesn't actually matter; easier to read if set to zero
-      coeff(0) = 0
+      /*coeff(0) = 0*/
       val polyMin = new PolynomialMinimizer(coeff)
       // find the best minimum near both 0, and some alpha0
       // typical values for alpha are in [0,2]
@@ -1535,25 +1539,27 @@ object NCG extends Logging {
         10,
         itemLocalIndexEncoder
       )
-      alpha_pncg = if (loss < 0) {
-        step
-      } else {
-        logStdout(s"NCG: $iter: computed non-decreasing loss; restarting in SD")
-        val g_norm_inv = (1.0 / math.sqrt(gradTgrad)).toFloat
-        direcUser = gradUser.mapValues{x => blockSCAL(x,-1.0f)}
-        direcItem = gradItem.mapValues{x => blockSCAL(x,-1.0f)}
-        val direcUser_norm = gradUser.mapValues{x => blockSCAL(x,-g_norm_inv)}
-        val direcItem_norm = gradItem.mapValues{x => blockSCAL(x,-g_norm_inv)}
-        computeAlpha(users,items,direcUser_norm,direcItem_norm,gradUser,gradItem,1.0f,1e-8f,10,itemLocalIndexEncoder)._1
-      }
+      alpha_pncg = step
+      /*alpha_pncg = if (loss < 0) {*/
+      /*  step*/
+      /*} else {*/
+      /*  logStdout(s"NCG: $iter: computed non-decreasing loss; restarting in SD")*/
+      /*  val g_norm_inv = (1.0 / math.sqrt(gradTgrad)).toFloat*/
+      /*  direcUser = gradUser.mapValues{x => blockSCAL(x,-1.0f)}*/
+      /*  direcItem = gradItem.mapValues{x => blockSCAL(x,-1.0f)}*/
+      /*  val direcUser_norm = gradUser.mapValues{x => blockSCAL(x,-g_norm_inv)}*/
+      /*  val direcItem_norm = gradItem.mapValues{x => blockSCAL(x,-g_norm_inv)}*/
+      /*  computeAlpha(users,items,direcUser_norm,direcItem_norm,gradUser,gradItem,1.0f,1e-8f,10,itemLocalIndexEncoder)._1*/
+      /*}*/
 
       // x_{k+1} = x_k + \alpha * p_k
       users = rddAXPY(alpha_pncg, direcUser_norm, users).cache()
       items = rddAXPY(alpha_pncg, direcItem_norm, items).cache()
 
       /*if (sc.checkpointDir.isDefined && (iter % checkpointInterval == 0))*/
-      if (iter % checkpointInterval == 0)
-      {
+      if (shouldCheckpoint(iter)) {
+      /*if (iter % checkpointInterval == 0)*/
+      /*{*/
         logStdout(s"PNCG: Checkpointing users/items at iter $iter")
         users.checkpoint()
         items.checkpoint()
@@ -1607,8 +1613,9 @@ object NCG extends Logging {
       }.cache
 
       /*if (sc.checkpointDir.isDefined && (iter % checkpointInterval == 0))*/
-      if (iter % checkpointInterval == 0)
-      {
+      if (shouldCheckpoint(iter)) {
+      /*if (iter % checkpointInterval == 0)*/
+      /*{*/
         logStdout(s"PNCG: Checkpointing users/item directionss at iter $iter")
         direcUser.checkpoint()
         direcItem.checkpoint()
@@ -2324,7 +2331,7 @@ object NCG extends Logging {
       numUserBlocks: Int = 10,
       numItemBlocks: Int = 10,
       maxIter: Int = 10,
-      regParam: Double = 1.0,
+      regParam: Double = 1e-2,
       implicitPrefs: Boolean = false,
       alpha: Double = 1.0,
       nonnegative: Boolean = false,
