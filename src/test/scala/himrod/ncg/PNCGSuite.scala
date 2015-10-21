@@ -35,7 +35,7 @@ import org.apache.log4j.Level
 /*import org.apache.spark.mllib.util.MLlibTestSparkContext*/
 /*import org.apache.spark.storage.StorageLevel*/
 
-object PNCGSuite {
+object NCGSuite {
 
   def generateRatingsAsJavaList(
       users: Int,
@@ -92,23 +92,51 @@ object PNCGSuite {
 }
 
 
-class PNCGSuite extends FunSuite with LocalSparkContext {
+class NCGSuite extends FunSuite with LocalSparkContext {
 /*class PNCGSuite extends SparkFunSuite with MLlibTestSparkContext {*/
     /*val (users,items) = PNCG.train(sampledRatings,features,10,10,iterations,0.01,implicitPrefs,1.0,false)*/
 
-  test("rank 10 matrices"){
+  test("ALS-NCG, f=10"){
     val users = 100
     val products = 100
     val features = 10
     val samplingRate = 0.5
     val implicitPrefs = false
     val negativeWeights = false
-    val negativeFactors = true
+    val negativeFactors = false
     val iters = 10
-    val (sampledRatings, trueRatings, truePrefs) = PNCGSuite.generateRatings(users, products,
+    val (sampledRatings, trueRatings, truePrefs) = NCGSuite.generateRatings(users, products,
         features, samplingRate, implicitPrefs, negativeWeights, negativeFactors)
     val R = sc.parallelize(sampledRatings)
-    PNCG.train(R,features,maxIter=iters)
+    NCG.trainPNCG(R,features,maxIter=iters)
+  }
+  test("ALS, f=10"){
+    val users = 100
+    val products = 100
+    val features = 10
+    val samplingRate = 0.5
+    val implicitPrefs = false
+    val negativeWeights = false
+    val negativeFactors = false
+    val iters = 10
+    val (sampledRatings, trueRatings, truePrefs) = NCGSuite.generateRatings(users, products,
+        features, samplingRate, implicitPrefs, negativeWeights, negativeFactors)
+    val R = sc.parallelize(sampledRatings)
+    NCG.trainALS(R,features,maxIter=iters)
+  }
+  test("NCG, f=10"){
+    val users = 100
+    val products = 100
+    val features = 10
+    val samplingRate = 0.5
+    val implicitPrefs = false
+    val negativeWeights = false
+    val negativeFactors = false
+    val iters = 10
+    val (sampledRatings, trueRatings, truePrefs) = NCGSuite.generateRatings(users, products,
+        features, samplingRate, implicitPrefs, negativeWeights, negativeFactors)
+    val R = sc.parallelize(sampledRatings)
+    NCG.trainNCG(R,features,maxIter=iters)
   }
 
   /*test("rank-1 matrices") {*/

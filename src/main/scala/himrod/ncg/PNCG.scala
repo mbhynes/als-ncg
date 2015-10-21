@@ -88,7 +88,7 @@ import org.apache.spark.storage.StorageLevel
  */
 case class Rating[@specialized(Int, Long) ID](user: ID, item: ID, rating: Float)
 
-object PNCG extends Logging {
+object NCG extends Logging {
 
   /**
    * Factor block that stores factors (Array[Float]) in an Array.
@@ -105,7 +105,6 @@ object PNCG extends Logging {
   private type FactorRDD = RDD[(Int,FactorBlock)]
 
   private type FacTup = (FactorRDD,FactorRDD) // (user,items)
-
 
   private def logStdout(msg: String): Unit = {
 		val time: Long = System.currentTimeMillis;
@@ -600,7 +599,7 @@ object PNCG extends Logging {
   }
 
   /** 
-   * Compute blas.SCALE; x = a*x, and return a new factor block 
+   * Compute blas.SCAL; x = a*x, and return a new factor block 
    * @param x a vector represented as a FactorBlock
    * @param a scalar
    */
@@ -611,8 +610,7 @@ object PNCG extends Logging {
     val result: FactorBlock = x.map(_.clone())
 
     var k = 0;
-    while (k < numVectors)
-    {
+    while (k < numVectors) {
       blas.sscal(rank,a,result(k),1)
       k += 1
     }
@@ -632,8 +630,7 @@ object PNCG extends Logging {
     val result: FactorBlock = y.map(_.clone())
 
     var k = 0;
-    while (k < numVectors)
-    {
+    while (k < numVectors) {
       //first scale b*y
       blas.sscal(rank,b,result(k),1)
 
@@ -712,9 +709,8 @@ object PNCG extends Logging {
   private def rddDOT(xs: FactorRDD, ys: FactorRDD): Float = {
     xs.join(ys)
       .map{case (_,(x,y)) => blockDOT(x,y)}
-      .reduce{_+_}
+      .treeReduce{_+_}
   }
-
 
   /** 
    * compute x dot x, and return a scalar
@@ -722,7 +718,7 @@ object PNCG extends Logging {
    */
   private def rddNORMSQR(xs: FactorRDD): Float = {
     xs.map{case (_,x) => blockNRMSQR(x)}
-      .reduce(_+_)
+      .treeReduce(_+_)
   }
 
   /** 
@@ -770,43 +766,48 @@ object PNCG extends Logging {
     val gradCoeffs = funcCoeffs.zipWithIndex.tail.map{case (c,n) => n*c}
     val hessCoeffs = gradCoeffs.zipWithIndex.tail.map{case (c,n) => n*c}
 
-    private def func(x: Float): Float = {
-      var k = 1
-      var sum = funcCoeffs(0)
-      var pow = x
-      while (k <= degree) {
-        sum += funcCoeffs(k) * pow
-        pow = pow * x
-        k += 1
-      }
-      sum
-    }
-    private def grad(x: Float): Float = {
-      var k = 1
-      var sum = gradCoeffs(0)
-      var pow = x
-      while (k <= degree-1) {
-        sum += gradCoeffs(k) * pow
-        pow = pow * x
-        k += 1
-      }
-      sum
-    }
-    private def hess(x: Float): Float = {
-      var k = 1
-      var sum = hessCoeffs(0)
-      var pow = x
-      while (k <= degree-2) {
-        sum += hessCoeffs(k) * pow
-        pow = pow * x
-        k += 1
-      }
-      sum
-    }
+    private def func(x: Float): Float = funcCoeffs.foldRight(0f)((a_n,sum) => a_n + x * sum)
+    private def grad(x: Float): Float = gradCoeffs.foldRight(0f)((a_n,sum) => a_n + x * sum)
+    private def hess(x: Float): Float = hessCoeffs.foldRight(0f)((a_n,sum) => a_n + x * sum)
+
+    /*private def func(x: Float): Float = {*/
+    /*  var k = 1*/
+    /*  var sum = funcCoeffs(0)*/
+    /*  var pow = x*/
+    /*  while (k <= degree) {*/
+    /*    sum += funcCoeffs(k) * pow*/
+    /*    pow = pow * x*/
+    /*    k += 1*/
+    /*  }*/
+    /*  sum*/
+    /*}*/
+    /*private def grad(x: Float): Float = {*/
+    /*  var k = 1*/
+    /*  var sum = gradCoeffs(0)*/
+    /*  var pow = x*/
+    /*  while (k <= degree-1) {*/
+    /*    sum += gradCoeffs(k) * pow*/
+    /*    pow = pow * x*/
+    /*    k += 1*/
+    /*  }*/
+    /*  sum*/
+    /*}*/
+
+    /*private def hess(x: Float): Float = {*/
+    /*  var k = 1*/
+    /*  var sum = hessCoeffs(0)*/
+    /*  var pow = x*/
+    /*  while (k <= degree-2) {*/
+    /*    sum += hessCoeffs(k) * pow*/
+    /*    pow = pow * x*/
+    /*    k += 1*/
+    /*  }*/
+    /*  sum*/
+    /*}*/
     // compute minimum around x0 using Newton's method
     // We find zeros of the gradient, since we are guaranteed that
     // the polynomial f(x) is decreasing at x = 0 for our problem
-    def findMin(x0: Float, tol: Float, maxIters: Int): Float = 
+    def minimize(x0: Float, tol: Float, maxIters: Int): (Float,Float) = 
     {
       var x = x0;
       var g = grad(x)
@@ -816,21 +817,30 @@ object PNCG extends Logging {
         g = grad(x)
         x -= g / hess(x)
         k += 1
-        /*logStdout(s"Rootfinder: $k: $x: $g: ${func(x)}")*/
+        logStdout(s"Rootfinder: $k: $x: $g: ${func(x)}")
       }
-      x
+      (x,func(x))
     }
 
-    def findMin(xs: Array[Float], tol: Float, maxIters: Int): Float = {
-      val stepSizes = xs.map{x => findMin(x,tol,maxIters)}
-      val minima = stepSizes.map{x => func(x)}
+    def minimize(xs: Array[Float], tol: Float, maxIters: Int): (Float,Float) = 
+    {
       val str = new StringBuilder(10 * xs.length)
-      minima.foreach{x => str.append(x.toString + ",")}
-      logStdout(s"findMin: found local minima: ${str.mkString}")
-      str.clear
-      stepSizes.foreach{x => str.append(x.toString + ",")}
-      logStdout(s"findMin: stepsizes for minima: ${str.mkString}")
-      stepSizes(minima.zipWithIndex.min._2)
+      funcCoeffs.foreach{x => str.append(x.toString + ",")}
+      logStdout(s"PolynomialMinimizer: coeff: ${str.mkString}")
+      /*str.clear*/
+      /*stepSizes.foreach{x => str.append(x.toString + ",")}*/
+      /*logStdout(s"minimize: stepsizes for minima: ${str.mkString}")*/
+      val res = xs.map{x => minimize(x,tol,maxIters)}
+      val stepSizes = res.map{x => x._1}
+      val minima = res.map{x => x._2}
+      /*val str = new StringBuilder(10 * xs.length)*/
+      /*minima.foreach{x => str.append(x.toString + ",")}*/
+      /*logStdout(s"minimize: found local minima: ${str.mkString}")*/
+      /*str.clear*/
+      /*stepSizes.foreach{x => str.append(x.toString + ",")}*/
+      /*logStdout(s"minimize: stepsizes for minima: ${str.mkString}")*/
+      val step = stepSizes(minima.zipWithIndex.min._2)
+      (step,func(step))
     }
   }
 
@@ -839,7 +849,7 @@ object PNCG extends Logging {
    * Implementation of the nonlinearly-preconditioned CG accelerated ALS algorithm.
    */
   /*@DeveloperApi*/
-  def train[ID: ClassTag]( // scalastyle:ignore
+  def trainPNCG[ID: ClassTag]( // scalastyle:ignore
       ratings: RDD[Rating[ID]],
       rank: Int = 10,
       numUserBlocks: Int = 10,
@@ -882,7 +892,8 @@ object PNCG extends Logging {
 
     val numUsers = computeDimension(userInBlocks);
     val numItems = computeDimension(itemInBlocks);
-    val dof: Float = 1.0f * rank * (numUsers + numItems)
+    /*val dof: Float = 1.0f * rank * (numUsers + numItems)*/
+    val dof: Float = 1.0f
     logStdout(s"PNCG: Computing factors for $numUsers users and $numItems items: dof=$dof")
 
     var userCheckpointFile: Option[String] = None
@@ -975,7 +986,7 @@ object PNCG extends Logging {
         tol: Float,
         maxIters: Int,
         srcEncoder: LocalIndexEncoder
-        ): Float = 
+        ): (Float,Float) = 
     {
       // form RDDs of (key,(x,p)) --- a "ray" with a point and a direction
       val userRay: RDD[(Int, (FactorBlock,FactorBlock))] = userFac.join(userDirec)
@@ -983,8 +994,6 @@ object PNCG extends Logging {
 
       val (xx_user,xp_user,pp_user) = evalTikhonovRayNorms(userRay,userCounts,rank,regParam)
       val (xx_item,xp_item,pp_item) = evalTikhonovRayNorms(itemRay,itemCounts,rank,regParam)
-
-      /*val (userGrad,itemGrad) = computeGradient(userFac,itemFac,persist=false)*/
 
       val gradientProdDirec: Float = rddDOT(userGrad,userDirec) + rddDOT(itemGrad,itemDirec)
 
@@ -1061,7 +1070,7 @@ object PNCG extends Logging {
           rank
         )
         .map{case ( (block,rays),ray) => computeSquaredErrorFlat(block,rays,ray)}
-        .reduce{ (x,y) => 
+        .treeReduce{ (x,y) => 
           val p = y.clone
           blas.saxpy(5,1.0f,x,1,p,1)
           p
@@ -1074,9 +1083,9 @@ object PNCG extends Logging {
       // this coefficient doesn't actually matter; easier to read if set to zero
       coeff(0) = 0
       val polyMin = new PolynomialMinimizer(coeff)
-      // find the best minimum near both alpha0 and at 20, which is far;
+      // find the best minimum near both 0, and some alpha0
       // typical values for alpha are in [0,2]
-      polyMin.findMin(Array(alpha0,20f), tol, maxIters)
+      polyMin.minimize(Array(alpha0,2f), tol, maxIters)
     }
 
     val seedGen = new XORShiftRandom(seed)
@@ -1118,12 +1127,13 @@ object PNCG extends Logging {
     logStdout(s"PNCG: 0: $alpha_pncg: $beta_pncg: ${1/dof*math.sqrt(rddNORMSQR(gradUser)+rddNORMSQR(gradItem))}: ${costFunc((users,items))}")
     for (iter <- 1 to maxIter) 
     {
-      alpha_pncg = computeAlpha(users,items,direcUser,direcItem,gradUser,gradItem,
+      val (step,loss) = computeAlpha(users,items,direcUser,direcItem,gradUser,gradItem,
         alpha0,
         1e-8f,
-        10,
+        20,
         itemLocalIndexEncoder
       )
+      alpha_pncg = step
 
       // x_{k+1} = x_k + \alpha * p_k
       users = rddAXPY(alpha_pncg, direcUser, users).cache()
@@ -1162,9 +1172,8 @@ object PNCG extends Logging {
       gradTgrad = rddDOT(gradUser,gradUser_pc) + rddDOT(gradItem,gradItem_pc);
 
       //original beta_pncg version:
-      /*beta_pncg = (gradTgrad - (rddDOT(gradUser,gradUser_pc_old) + rddDOT(gradItem,gradItem_pc_old)) ) / gradTgrad_old*/
-
-      beta_pncg = (gradTgrad - (rddDOT(gradUser_old,gradUser_pc) + rddDOT(gradItem_old,gradItem_pc)) ) / gradTgrad_old
+      beta_pncg = (gradTgrad - (rddDOT(gradUser,gradUser_pc_old) + rddDOT(gradItem,gradItem_pc_old)) ) / gradTgrad_old
+      /*beta_pncg = (gradTgrad - (rddDOT(gradUser_old,gradUser_pc) + rddDOT(gradItem_old,gradItem_pc)) ) / gradTgrad_old*/
 
       // compute the restart condition from Nocedal & Wright, Numerical Optimization 2006
       /*val shouldRestart: Boolean = {*/
@@ -1207,8 +1216,8 @@ object PNCG extends Logging {
         direcItem.count()
         deleteCheckpointFile(direcUserCheckpointFile)
         deleteCheckpointFile(direcItemCheckpointFile)
-        direcUserCheckpointFile = users.getCheckpointFile
-        direcItemCheckpointFile = items.getCheckpointFile
+        direcUserCheckpointFile = direcUser.getCheckpointFile
+        direcItemCheckpointFile = direcItem.getCheckpointFile
       }
 
       // store old preconditioned gradient vectors for computing \beta
@@ -1225,6 +1234,393 @@ object PNCG extends Logging {
       /*gradUser_pc_old.count*/
       /*gradItem_pc_old.count*/
 
+      logStdout(s"PNCG: $iter: $alpha_pncg: $beta_pncg: ${1/dof * math.sqrt(rddNORMSQR(gradUser)+rddNORMSQR(gradItem))}: ${costFunc((users,items))}")
+    }
+    
+    val userIdAndFactors = userInBlocks
+      .mapValues(_.srcIds)
+      .join(users)
+      .mapPartitions({ items =>
+        items.flatMap { case (_, (ids, factors)) =>
+          ids.view.zip(factors)
+        }
+      // Preserve the partitioning because IDs are consistent with the partitioners in userInBlocks
+      // and users.
+      }, preservesPartitioning = true)
+      .setName("userFactors")
+      .persist(finalRDDStorageLevel)
+    val itemIdAndFactors = itemInBlocks
+      .mapValues(_.srcIds)
+      .join(items)
+      .mapPartitions({ items =>
+        items.flatMap { case (_, (ids, factors)) =>
+          ids.view.zip(factors)
+        }
+      }, preservesPartitioning = true)
+      .setName("itemFactors")
+      .persist(finalRDDStorageLevel)
+    if (finalRDDStorageLevel != StorageLevel.NONE) {
+      userIdAndFactors.count()
+      items.unpersist()
+      itemIdAndFactors.count()
+      userInBlocks.unpersist()
+      userOutBlocks.unpersist()
+      itemInBlocks.unpersist()
+      itemOutBlocks.unpersist()
+      blockRatings.unpersist()
+    }
+    (userIdAndFactors, itemIdAndFactors)
+  }
+
+  /**
+   * :: DeveloperApi ::
+   * Implementation of the nonlinearly-preconditioned CG accelerated ALS algorithm.
+   */
+  /*@DeveloperApi*/
+  def trainNCG[ID: ClassTag]( // scalastyle:ignore
+      ratings: RDD[Rating[ID]],
+      rank: Int = 10,
+      numUserBlocks: Int = 10,
+      numItemBlocks: Int = 10,
+      maxIter: Int = 10,
+      regParam: Double = 1.0,
+      implicitPrefs: Boolean = false,
+      alpha: Double = 1.0,
+      nonnegative: Boolean = false,
+      intermediateRDDStorageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK,
+      finalRDDStorageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK,
+      checkpointInterval: Int = 10,
+      seed: Long = 0L)(
+      implicit ord: Ordering[ID]): (RDD[(ID, Array[Float])], RDD[(ID, Array[Float])]) = 
+  {
+    require(intermediateRDDStorageLevel != StorageLevel.NONE,
+      "ALS is not designed to run without persisting intermediate RDDs.")
+    val sc = ratings.sparkContext
+    val userPart = new ALSPartitioner(numUserBlocks)
+    val itemPart = new ALSPartitioner(numItemBlocks)
+    val userLocalIndexEncoder = new LocalIndexEncoder(userPart.numPartitions)
+    val itemLocalIndexEncoder = new LocalIndexEncoder(itemPart.numPartitions)
+    val solver = if (nonnegative) new NNLSSolver else new CholeskySolver
+    val blockRatings = partitionRatings(ratings, userPart, itemPart)
+      .persist(intermediateRDDStorageLevel)
+    val (userInBlocks, userOutBlocks, userCounts) =
+      makeBlocks("user", blockRatings, userPart, itemPart, intermediateRDDStorageLevel)
+    // materialize blockRatings and user blocks
+    userCounts.count()
+    userOutBlocks.count()
+    val swappedBlockRatings = blockRatings.map {
+      case ((userBlockId, itemBlockId), RatingBlock(userIds, itemIds, localRatings)) =>
+        ((itemBlockId, userBlockId), RatingBlock(itemIds, userIds, localRatings))
+    }
+    val (itemInBlocks, itemOutBlocks, itemCounts) =
+      makeBlocks("item", swappedBlockRatings, itemPart, userPart, intermediateRDDStorageLevel)
+    // materialize item blocks
+    itemCounts.count()
+    itemOutBlocks.count()
+
+    val numUsers = computeDimension(userInBlocks);
+    val numItems = computeDimension(itemInBlocks);
+    /*val dof: Float = 1.0f * rank * (numUsers + numItems)*/
+    val dof: Float = 1.0f
+    logStdout(s"PNCG: Computing factors for $numUsers users and $numItems items: dof=$dof")
+
+    var userCheckpointFile: Option[String] = None
+    var itemCheckpointFile: Option[String] = None
+    var direcUserCheckpointFile: Option[String] = None
+    var direcItemCheckpointFile: Option[String] = None
+
+    val shouldCheckpoint: Int => Boolean = (iter) =>
+      (sc.getCheckpointDir.isDefined && (iter % checkpointInterval == 0))
+      /*(iter % checkpointInterval == 0)*/
+
+    def deleteCheckpointFile(file: Option[String]): Unit = {
+      if (file != None){
+        try {
+          FileSystem.get(sc.hadoopConfiguration).delete(new Path(file.get), true)
+        } catch {
+          case e: IOException =>
+            logWarning(s"Cannot delete checkpoint file $file:", e)
+        }
+      }
+    }
+
+    def costFunc(x: FacTup): Float =
+    {
+      /*logStdout("costFunc: _init_");*/
+      val usr = x._1
+      val itm = x._2
+      val sumSquaredErr: Float = evalFrobeniusCost(
+        itm, 
+        usr, 
+        itemOutBlocks, 
+        userInBlocks, 
+        rank, 
+        regParam,
+        itemLocalIndexEncoder
+      )  
+      /*logStdout("costFunc: var: sumSquaredErr: " + sumSquaredErr)*/
+      val usrNorm: Float = evalTikhonovNorm(
+        usr, 
+        userCounts,
+        rank,
+        regParam
+      ) 
+      /*logStdout("costFunc: var: usrNorm: " + usrNorm)*/
+      val itmNorm: Float = evalTikhonovNorm(
+        itm, 
+        itemCounts,
+        rank,
+        regParam
+      )
+      /*logStdout("costFunc: var: itmNorm: " + itmNorm)*/
+      /*logStdout("costFunc: " + (sumSquaredErr + usrNorm + itmNorm))*/
+      sumSquaredErr + usrNorm + itmNorm
+    }
+
+    def computeAlpha(
+        userFac: FactorRDD,
+        itemFac: FactorRDD,
+        userDirec: FactorRDD,
+        itemDirec: FactorRDD,
+        userGrad: FactorRDD,
+        itemGrad: FactorRDD,
+        alpha0: Float,
+        tol: Float,
+        maxIters: Int,
+        srcEncoder: LocalIndexEncoder
+        ): (Float,Float) = 
+    {
+      // form RDDs of (key,(x,p)) --- a "ray" with a point and a direction
+      val userRay: RDD[(Int, (FactorBlock,FactorBlock))] = userFac.join(userDirec)
+      val itemRay: RDD[(Int, (FactorBlock,FactorBlock))] = itemFac.join(itemDirec)
+
+      val (xx_user,xp_user,pp_user) = evalTikhonovRayNorms(userRay,userCounts,rank,regParam)
+      val (xx_item,xp_item,pp_item) = evalTikhonovRayNorms(itemRay,itemCounts,rank,regParam)
+
+      val gradientProdDirec: Float = rddDOT(userGrad,userDirec) + rddDOT(itemGrad,itemDirec)
+
+      type Ray = (FactorBlock,FactorBlock)
+
+      def computeSquaredErrorFlat(
+          block: InBlock[ID], 
+          sortedRays: (Array[FactorBlock],Array[FactorBlock]),
+          current: Ray): Array[Float] = 
+      {
+        val currentFactors = current._1
+        val currentFactorDirecs = current._2
+        val sortedSrcFactors = sortedRays._1
+        val sortedSrcFactorDirecs = sortedRays._2
+        val len = block.srcIds.length
+        var j = 0
+
+        val coeff: Array[Float] = Array.ofDim(5)
+
+        while (j < len) 
+        {
+          val y = currentFactors(j)
+          val q = currentFactorDirecs(j)
+          var i = block.dstPtrs(j)
+
+          while (i < block.dstPtrs(j + 1)) {
+            val encoded = block.dstEncodedIndices(i)
+            val blockId = srcEncoder.blockId(encoded)
+            val localIndex = srcEncoder.localIndex(encoded)
+
+            val x = sortedSrcFactors(blockId)(localIndex)
+            val p = sortedSrcFactorDirecs(blockId)(localIndex)
+
+            // compute the necessary dot products
+            val xy = blas.sdot(rank,x,1,y,1)
+            val xq = blas.sdot(rank,x,1,q,1)
+            val py = blas.sdot(rank,p,1,y,1)
+            val pq = blas.sdot(rank,p,1,q,1)
+
+            // avoid catastrophic cancellation where possible:
+            // don't compute (xy - r) in coeff(0) or coeff(2)
+            if (implicitPrefs) {
+              val r = if (block.ratings(i) == 0) 0f else 1f
+              val c = (1 + alpha * block.ratings(i)).toFloat
+              coeff(0) += c*( (xy*xy  - 2*xy*r) + r*r )
+              coeff(1) += 2*c*(xq + py)*(xy - r)
+              coeff(2) += c*( 2*pq*xy + xq*xq + py*(py + 2*xq) - 2*r*pq )
+              coeff(3) += 2*c*pq*(xq + py)
+              coeff(4) += c*pq*pq
+            } else {
+              val r = block.ratings(i)
+              coeff(0) += (xy*xy  - 2*xy*r) + r*r
+              coeff(1) += 2*(xq + py)*(xy - r)
+              coeff(2) += 2*pq*xy + xq*xq + py*(py + 2*xq) - 2*r*pq
+              coeff(3) += 2*pq*(xq + py)
+              coeff(4) += pq*pq
+            }
+
+            i += 1
+          }
+          j += 1
+        }
+        coeff
+      }
+
+      val coeff: Array[Float] = 
+        makeFrobeniusCostRDD(
+          itemFac, 
+          itemDirec,
+          userFac, 
+          userDirec,
+          itemOutBlocks, 
+          userInBlocks, 
+          rank
+        )
+        .map{case ( (block,rays),ray) => computeSquaredErrorFlat(block,rays,ray)}
+        .treeReduce{ (x,y) => 
+          val p = y.clone
+          blas.saxpy(5,1.0f,x,1,p,1)
+          p
+        }
+      // add the tikhonov regularization to the coefficients
+      coeff(0) += xx_user + xx_item
+      coeff(1) += 2*(xp_user + xp_item)
+      coeff(2) += 2*(pp_user + pp_item)
+
+      // this coefficient doesn't actually matter; easier to read if set to zero
+      coeff(0) = 0
+      val polyMin = new PolynomialMinimizer(coeff)
+      // find the best minimum near both 0, and some alpha0
+      // typical values for alpha are in [0,2]
+      polyMin.minimize(Array(alpha0,500f), tol, maxIters)
+    }
+
+    val seedGen = new XORShiftRandom(seed)
+    var users = initialize(userInBlocks, rank, seedGen.nextLong()).cache
+    var items = initialize(itemInBlocks, rank, seedGen.nextLong()).cache
+
+    var gradUser: FactorRDD = evalGradient(items,users,itemOutBlocks,userInBlocks,rank,regParam,itemLocalIndexEncoder).cache()
+    var gradItem: FactorRDD = evalGradient(users,items,userOutBlocks,itemInBlocks,rank,regParam,userLocalIndexEncoder).cache()
+
+    // initial search direction to -gradient_preconditioned 
+    var direcUser: FactorRDD = gradUser.mapValues{x => blockSCAL(x,-1.0f)}.cache()
+    var direcItem: FactorRDD = gradItem.mapValues{x => blockSCAL(x,-1.0f)}.cache()
+
+    var gradUser_old: FactorRDD = gradUser
+    var gradItem_old: FactorRDD = gradItem
+
+    // compute g^T * g
+    var gradTgrad = rddNORMSQR(gradUser) + rddNORMSQR(gradItem);
+    var gradTgrad_old = gradTgrad;
+
+    val restartTol: Float = 0.1f
+    val alpha0: Float = 1.0f
+    var beta_pncg: Float = 1.0f
+    var alpha_pncg: Float = alpha0
+    var gTp: Float = gradTgrad
+    var gTp_old = gTp
+
+    logStdout(s"PNCG: 0: $alpha_pncg: $beta_pncg: ${1/dof*math.sqrt(gradTgrad)}: ${costFunc((users,items))}")
+    for (iter <- 1 to maxIter) 
+    {
+      gradUser_old = gradUser
+      gradItem_old = gradItem
+      gradTgrad_old = gradTgrad
+
+      val p_norm_inv = (1.0/math.sqrt(rddNORMSQR(direcUser) + rddNORMSQR(direcItem))).toFloat
+      val direcUser_norm = direcUser.mapValues{x => blockSCAL(x,p_norm_inv)}.cache()
+      val direcItem_norm = direcItem.mapValues{x => blockSCAL(x,p_norm_inv)}.cache()
+      /*var gTp: Float = rddDOT(gradUser,direcUser) + rddDOT(itemGrad,itemDirec)*/
+
+      /*val initStep = alpha_pncg * gTp / gTp_old*/
+
+      val (step,loss) = computeAlpha(users,items,direcUser_norm,direcItem_norm,gradUser,gradItem,
+        2*math.abs(alpha_pncg).toFloat,
+        1e-8f,
+        10,
+        itemLocalIndexEncoder
+      )
+      alpha_pncg = if (loss < 0) {
+        step
+      } else {
+        logStdout(s"NCG: $iter: computed non-decreasing loss; restarting in SD")
+        val g_norm_inv = (1.0 / math.sqrt(gradTgrad)).toFloat
+        direcUser = gradUser.mapValues{x => blockSCAL(x,-1.0f)}
+        direcItem = gradItem.mapValues{x => blockSCAL(x,-1.0f)}
+        val direcUser_norm = gradUser.mapValues{x => blockSCAL(x,-g_norm_inv)}
+        val direcItem_norm = gradItem.mapValues{x => blockSCAL(x,-g_norm_inv)}
+        computeAlpha(users,items,direcUser_norm,direcItem_norm,gradUser,gradItem,1.0f,1e-8f,10,itemLocalIndexEncoder)._1
+      }
+
+      // x_{k+1} = x_k + \alpha * p_k
+      users = rddAXPY(alpha_pncg, direcUser_norm, users).cache()
+      items = rddAXPY(alpha_pncg, direcItem_norm, items).cache()
+
+      /*if (sc.checkpointDir.isDefined && (iter % checkpointInterval == 0))*/
+      if (iter % checkpointInterval == 0)
+      {
+        logStdout(s"PNCG: Checkpointing users/items at iter $iter")
+        users.checkpoint()
+        items.checkpoint()
+        items.count()
+        users.count()
+        deleteCheckpointFile(userCheckpointFile)
+        deleteCheckpointFile(itemCheckpointFile)
+        userCheckpointFile = users.getCheckpointFile
+        itemCheckpointFile = items.getCheckpointFile
+      }
+
+      // PR
+      gradUser = evalGradient(items,users,itemOutBlocks,userInBlocks,rank,regParam,itemLocalIndexEncoder,implicitPrefs,alpha).cache()
+      gradItem = evalGradient(users,items,userOutBlocks,itemInBlocks,rank,regParam,userLocalIndexEncoder,implicitPrefs,alpha).cache()
+
+      /*gradTgrad = rddDOT(gradUser,gradUser_pc) + rddDOT(gradItem,gradItem_pc);*/
+      gradTgrad = rddNORMSQR(gradUser) + rddNORMSQR(gradItem)
+
+      //PR+
+      beta_pncg = (gradTgrad - (rddDOT(gradUser,gradUser_old) + rddDOT(gradItem,gradItem_old)) ) / gradTgrad_old
+
+      // compute the restart condition from Nocedal & Wright, Numerical Optimization 2006
+      /*val shouldRestart: Boolean = {*/
+      /*  val projection = rddDOT(gradUser_pc, gradUser_pc_old) + rddDOT(gradItem_pc, gradItem_pc_old)*/
+      /*  val scaling = rddNORMSQR(gradUser_pc) + rddNORMSQR(gradItem_pc)*/
+      /*  val restartTest = projection / scaling*/
+      /*  val result = restartTest > restartTol*/
+      /*  if (result) */
+      /*    logStdout(s"PNCG: $iter: restartTest = $restartTest > $restartTol: Restarting with steepest descent")*/
+      /*  result*/
+      /*}*/
+      /*if (beta_pncg < 0) */
+      /*  logStdout(s"PNCG: $iter: beta < 0: Restarting with steepest descent")*/
+      /*else if (shouldRestart)*/
+      
+      // p_{k+1} = -g + \beta * p_k
+      direcUser = {
+        if (beta_pncg < 0) {
+          logStdout(s"PNCG: beta < 0 in iter $iter: Restarting with steepest descent")
+          gradUser.mapValues{x => blockSCAL(x,-1.0f)}
+        } else {
+          rddAXPBY(-1.0f,gradUser,beta_pncg,direcUser)
+        }
+      }.cache
+      direcItem = {
+        if (beta_pncg < 0) {
+          gradItem.mapValues{x => blockSCAL(x,-1.0f)}
+        } else {
+          rddAXPBY(-1.0f,gradItem,beta_pncg,direcItem)
+        }
+      }.cache
+
+      /*if (sc.checkpointDir.isDefined && (iter % checkpointInterval == 0))*/
+      if (iter % checkpointInterval == 0)
+      {
+        logStdout(s"PNCG: Checkpointing users/item directionss at iter $iter")
+        direcUser.checkpoint()
+        direcItem.checkpoint()
+        direcUser.count()
+        direcItem.count()
+        deleteCheckpointFile(direcUserCheckpointFile)
+        deleteCheckpointFile(direcItemCheckpointFile)
+        direcUserCheckpointFile = direcUser.getCheckpointFile
+        direcItemCheckpointFile = direcItem.getCheckpointFile
+      }
+
+      // store old preconditioned gradient vectors for computing \beta
       logStdout(s"PNCG: $iter: $alpha_pncg: $beta_pncg: ${1/dof * math.sqrt(rddNORMSQR(gradUser)+rddNORMSQR(gradItem))}: ${costFunc((users,items))}")
     }
     
@@ -1580,13 +1976,13 @@ object PNCG extends Logging {
       if (implicitPrefs) {
         ray
           .map{ case (_,(x,p)) => evalFlatBlockNorms(x,p) }
-          .reduce{ (x,y) => (x._1+y._1, x._2+y._2, x._3 + y._3) }
+          .treeReduce{ (x,y) => (x._1+y._1, x._2+y._2, x._3 + y._3) }
       } else {
         ray
           .mapValues{ case(x,p) => evalBlockNorms(x,p) }
           .join(counts)
           .map{case (key,((xx,xp,pp),n)) => (scaleByNumRatings(xx,n),scaleByNumRatings(xp,n),scaleByNumRatings(pp,n)) }
-          .reduce{ (x,y) => (x._1+y._1, x._2+y._2, x._3 + y._3) }
+          .treeReduce{ (x,y) => (x._1+y._1, x._2+y._2, x._3 + y._3) }
       }
     }
 
@@ -1632,7 +2028,7 @@ object PNCG extends Logging {
       .mapValues{evalBlockNorms}
       .join(counts)
       .map{case (key,(f,n)) => scaleByNumRatings(f,n)}
-      .reduce(_ + _)
+      .treeReduce(_ + _)
 
     lambda.toFloat * factorNorm
   }
@@ -1806,7 +2202,7 @@ object PNCG extends Logging {
         computeSquaredError(block,factorTuple,fac)
       }
       .values
-      .reduce(_+_)
+      .treeReduce(_+_)
 
     result.toFloat
   }
@@ -2095,7 +2491,7 @@ object PNCG extends Logging {
     (userIdAndFactors, itemIdAndFactors)
   }
   private def computeDimension[ID](inBlocks: RDD[(Int, InBlock[ID])]): Int = {
-    inBlocks.values.map{block => block.srcIds.length}.reduce(_+_)
+    inBlocks.values.map{block => block.srcIds.length}.treeReduce(_+_)
   }
 
 	private type ArgMap = Map[Symbol,String]
@@ -2123,6 +2519,8 @@ object PNCG extends Logging {
         parseArgs(map ++ argToMap("genCDF",value), tail)
       case ("--als") :: tail =>
         parseArgs(map ++ argToMap("runALS","true"), tail)
+      case ("--ncg") :: tail =>
+        parseArgs(map ++ argToMap("runNCG","true"), tail)
 			case ("--userBlocks" | "-N") :: value :: tail =>
         parseArgs(map ++ argToMap("userBlocks",value), tail)
 			case ("--itemBlocks" | "-M") :: value :: tail =>
@@ -2209,7 +2607,8 @@ object PNCG extends Logging {
     /*if (implicitPrefs)*/
     /*  PNCG.trainImplicit(ratings,rank,numIters,regParam,userBlocks,alpha,seed,runPNCG)*/
     /*else*/
-      PNCG.train(
+    if (vars.contains('runALS)) {
+      NCG.trainALS(
         ratings,
         rank,
         userBlocks,
@@ -2220,6 +2619,31 @@ object PNCG extends Logging {
         alpha,
         nonnegative = false,
         seed = seed)
+    } else if (vars.contains('runNCG)) {
+      NCG.trainNCG(
+        ratings,
+        rank,
+        userBlocks,
+        userBlocks,
+        numIters,
+        regParam,
+        implicitPrefs,
+        alpha,
+        nonnegative = false,
+        seed = seed)
+    } else {
+      NCG.trainPNCG(
+        ratings,
+        rank,
+        userBlocks,
+        userBlocks,
+        numIters,
+        regParam,
+        implicitPrefs,
+        alpha,
+        nonnegative = false,
+        seed = seed)
+    }
         /*intermediateRDDStorageLevel = StorageLevel.MEMORY_AND_DISK,*/
         /*finalRDDStorageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK,*/
         /*checkpointInterval: Int = 10,*/
