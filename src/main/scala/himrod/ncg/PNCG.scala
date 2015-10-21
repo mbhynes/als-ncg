@@ -1,59 +1,11 @@
-/*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+/* NCG.scala
  *
- *    http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-
-package himrod.ncg
-
-import himrod.ncg.utils._
-
-import java.util.Random
-import java.{util => ju}
-import java.io.IOException
-
-import scala.collection.mutable
-import scala.reflect.ClassTag
-import scala.util.Sorting
-import scala.util.hashing.byteswap64
-
-import com.github.fommil.netlib.BLAS.{getInstance => blas}
-import com.github.fommil.netlib.LAPACK.{getInstance => lapack}
-import org.apache.hadoop.fs.{FileSystem, Path}
-import org.netlib.util.intW
-
-import org.apache.spark.{SparkConf,SparkContext}
-import org.apache.spark.{Logging, Partitioner}
-/*import org.apache.spark.annotation.{DeveloperApi, Experimental}*/
-/*import org.apache.spark.ml.{Estimator, Model}*/
-/*import org.apache.spark.ml.param._*/
-/*import org.apache.spark.ml.param.shared._*/
-/*import org.apache.spark.ml.util.{Identifiable, SchemaUtils}*/
-/*import org.apache.spark.mllib.optimization.NNLS*/
-import org.apache.spark.rdd.RDD
-/*import org.apache.spark.sql.DataFrame*/
-/*import org.apache.spark.sql.functions._*/
-/*import org.apache.spark.sql.types.{DoubleType, FloatType, IntegerType, StructType}*/
-import org.apache.spark.storage.StorageLevel
-/*import org.apache.spark.util.Utils*/
-/*import org.apache.spark.util.collection.{OpenHashMap, OpenHashSet, SortDataFormat, Sorter}*/
-
-/*import org.apache.spark.util.random.XORShiftRandom*/
-
-/**
- * :: Highly Experimental ::
- * Nonlinearly preconditioned CG Accelerated Alternating Least Squares (ALS) matrix factorization.
+ * Nonlinearly preconditioned Nonlinear Conjugate Gradient 
+ * Accelerated Alternating Least Squares (ALS) matrix factorization.
+ * 
+ * This file contains the implementation of the 
+ * ALS-NCG algorithm (http://arxiv.org/abs/1508.03110)
+ * for accelerating ALS with an NCG wrapper.
  *
  * ALS attempts to estimate the ratings matrix `R` as the product of two lower-rank matrices,
  * `X` and `Y`, i.e. `X * Yt = R`. Typically these approximations are called 'factor' matrices.
@@ -80,91 +32,46 @@ import org.apache.spark.storage.StorageLevel
  * r > 0 and 0 if r <= 0. The ratings then act as 'confidence' values related to strength of
  * indicated user
  * preferences rather than explicit ratings given to items.
+ *
+ * =================================================
+ * Authors: 
+ *  Michael B Hynes, mbhynes@uwaterloo.ca (ALS-NCG portion)
+ *  Xiangui Meng, meng@databricks.com (original ALS code)
+ *
+ * Acknowledgements:
+ *  Chris Johnson (original implementation for Spotify)
+ *
+ * =================================================
+ * License: GPL 3
+ * Creation Date: Tue 20 Oct 2015 09:12:53 PM EDT
+ * Last Modified: Tue 20 Oct 2015 09:18:40 PM EDT
+ * =================================================
  */
-/*@Experimental*/
-/*class PNCG(override val uid: String) extends Estimator[ALSModel] with ALSParams {*/
-/**/
-/*  /*import org.apache.spark.ml.recommendation.PNCG.Rating*/*/
-/**/
-/*  def this() = this(Identifiable.randomUID("als"))*/
-/**/
-/*  /** @group setParam */*/
-/*  def setRank(value: Int): this.type = set(rank, value)*/
-/**/
-/*  /** @group setParam */*/
-/*  def setNumUserBlocks(value: Int): this.type = set(numUserBlocks, value)*/
-/**/
-/*  /** @group setParam */*/
-/*  def setNumItemBlocks(value: Int): this.type = set(numItemBlocks, value)*/
-/**/
-/*  /** @group setParam */*/
-/*  def setImplicitPrefs(value: Boolean): this.type = set(implicitPrefs, value)*/
-/**/
-/*  /** @group setParam */*/
-/*  def setAlpha(value: Double): this.type = set(alpha, value)*/
-/**/
-/*  /** @group setParam */*/
-/*  def setUserCol(value: String): this.type = set(userCol, value)*/
-/**/
-/*  /** @group setParam */*/
-/*  def setItemCol(value: String): this.type = set(itemCol, value)*/
-/**/
-/*  /** @group setParam */*/
-/*  def setRatingCol(value: String): this.type = set(ratingCol, value)*/
-/**/
-/*  /** @group setParam */*/
-/*  def setPredictionCol(value: String): this.type = set(predictionCol, value)*/
-/**/
-/*  /** @group setParam */*/
-/*  def setMaxIter(value: Int): this.type = set(maxIter, value)*/
-/**/
-/*  /** @group setParam */*/
-/*  def setRegParam(value: Double): this.type = set(regParam, value)*/
-/**/
-/*  /** @group setParam */*/
-/*  def setNonnegative(value: Boolean): this.type = set(nonnegative, value)*/
-/**/
-/*  /** @group setParam */*/
-/*  def setCheckpointInterval(value: Int): this.type = set(checkpointInterval, value)*/
-/**/
-/*  /** @group setParam */*/
-/*  def setSeed(value: Long): this.type = set(seed, value)*/
-/**/
-/*  /***/
-/*   * Sets both numUserBlocks and numItemBlocks to the specific value.*/
-/*   * @group setParam*/
-/*   */*/
-/*  def setNumBlocks(value: Int): this.type = {*/
-/*    setNumUserBlocks(value)*/
-/*    setNumItemBlocks(value)*/
-/*    this*/
-/*  }*/
-/**/
-/*  override def fit(dataset: DataFrame): ALSModel = {*/
-/*    import dataset.sqlContext.implicits._*/
-/*    val ratings = dataset*/
-/*      .select(col($(userCol)).cast(IntegerType), col($(itemCol)).cast(IntegerType),*/
-/*        col($(ratingCol)).cast(FloatType))*/
-/*      .map { row =>*/
-/*        Rating(row.getInt(0), row.getInt(1), row.getFloat(2))*/
-/*      }*/
-/*    val (users, items) = PNCG.train(ratings, rank = $(rank),*/
-/*      numUserBlocks = $(numUserBlocks), numItemBlocks = $(numItemBlocks),*/
-/*      maxIter = $(maxIter), regParam = $(regParam), implicitPrefs = $(implicitPrefs),*/
-/*      alpha = $(alpha), nonnegative = $(nonnegative),*/
-/*      checkpointInterval = $(checkpointInterval), seed = $(seed))*/
-/*    val userDF = users.toDF("id", "features")*/
-/*    val itemDF = items.toDF("id", "features")*/
-/*    val model = new ALSModel(uid, $(rank), userDF, itemDF).setParent(this)*/
-/*    copyValues(model)*/
-/*  }*/
-/**/
-/*  override def transformSchema(schema: StructType): StructType = {*/
-/*    validateAndTransformSchema(schema)*/
-/*  }*/
-/**/
-/*  override def copy(extra: ParamMap): ALS = defaultCopy(extra)*/
-/*}*/
+
+package himrod.ncg
+
+// these utils are private[spark] and were copied verbatim
+import himrod.ncg.utils._
+
+import java.util.Random
+import java.{util => ju}
+import java.io.IOException
+
+import scala.collection.mutable
+import scala.reflect.ClassTag
+import scala.util.Sorting
+import scala.util.hashing.byteswap64
+
+import com.github.fommil.netlib.BLAS.{getInstance => blas}
+import com.github.fommil.netlib.LAPACK.{getInstance => lapack}
+import org.apache.hadoop.fs.{FileSystem, Path}
+import org.netlib.util.intW
+
+import org.apache.spark.{SparkConf,SparkContext}
+import org.apache.spark.{Logging, Partitioner}
+import org.apache.spark.rdd.RDD
+import org.apache.spark.storage.StorageLevel
+
 
 /**
  * :: DeveloperApi ::
@@ -174,184 +81,14 @@ import org.apache.spark.storage.StorageLevel
  * users and items must have the same type. The number of distinct users/items should be smaller
  * than 2 billion.
  */
-/*@DeveloperApi*/
 
+
+/**
+ * Rating class encoding a rating (i,j,R_ij) for user_i, movie_j
+ */
 case class Rating[@specialized(Int, Long) ID](user: ID, item: ID, rating: Float)
 
 object PNCG extends Logging {
-
-  /**
-   * :: DeveloperApi ::
-   * Rating class for better code readability.
-   */
-  /*@DeveloperApi*/
-  /*case class Rating[@specialized(Int, Long) ID](user: ID, item: ID, rating: Float)*/
-
-  private type FactorRDD = RDD[(Int,FactorBlock)]
-  private type FacTup = (FactorRDD,FactorRDD) // (user,items)
-
-  private def logStdout(msg: String): Unit = {
-		val time: Long = System.currentTimeMillis;
-		logInfo(msg);
-		println(time + ": " + msg);
-	}
-
-  /** Trait for least squares solvers applied to the normal equation. */
-  private trait LeastSquaresNESolver extends Serializable {
-    /** Solves a least squares problem with regularization (possibly with other constraints). */
-    def solve(ne: NormalEquation, lambda: Double): Array[Float]
-  }
-
-  /** Cholesky solver for least square problems. */
-  private class CholeskySolver extends LeastSquaresNESolver {
-
-    private val upper = "U"
-
-    /**
-     * Solves a least squares problem with L2 regularization:
-     *
-     *   min norm(A x - b)^2^ + lambda * norm(x)^2^
-     *
-     * @param ne a [[NormalEquation]] instance that contains AtA, Atb, and n (number of instances)
-     * @param lambda regularization constant
-     * @return the solution x
-     */
-    override def solve(ne: NormalEquation, lambda: Double): Array[Float] = {
-      val k = ne.k
-      // Add scaled lambda to the diagonals of AtA.
-      var i = 0
-      var j = 2
-      while (i < ne.triK) {
-        ne.ata(i) += lambda
-        i += j
-        j += 1
-      }
-      val info = new intW(0)
-      lapack.dppsv(upper, k, 1, ne.ata, ne.atb, k, info)
-      val code = info.`val`
-      assert(code == 0, s"lapack.dppsv returned $code.")
-      val x = new Array[Float](k)
-      i = 0
-      while (i < k) {
-        x(i) = ne.atb(i).toFloat
-        i += 1
-      }
-      ne.reset()
-      x
-    }
-  }
-
-  /** NNLS solver. */
-  private class NNLSSolver extends LeastSquaresNESolver {
-    private var rank: Int = -1
-    private var workspace: NNLS.Workspace = _
-    private var ata: Array[Double] = _
-    private var initialized: Boolean = false
-
-    private def initialize(rank: Int): Unit = {
-      if (!initialized) {
-        this.rank = rank
-        workspace = NNLS.createWorkspace(rank)
-        ata = new Array[Double](rank * rank)
-        initialized = true
-      } else {
-        require(this.rank == rank)
-      }
-    }
-
-    /**
-     * Solves a nonnegative least squares problem with L2 regularizatin:
-     *
-     *   min_x_  norm(A x - b)^2^ + lambda * n * norm(x)^2^
-     *   subject to x >= 0
-     */
-    override def solve(ne: NormalEquation, lambda: Double): Array[Float] = {
-      val rank = ne.k
-      initialize(rank)
-      fillAtA(ne.ata, lambda)
-      val x = NNLS.solve(ata, ne.atb, workspace)
-      ne.reset()
-      x.map(x => x.toFloat)
-    }
-
-    /**
-     * Given a triangular matrix in the order of fillXtX above, compute the full symmetric square
-     * matrix that it represents, storing it into destMatrix.
-     */
-    private def fillAtA(triAtA: Array[Double], lambda: Double) {
-      var i = 0
-      var pos = 0
-      var a = 0.0
-      while (i < rank) {
-        var j = 0
-        while (j <= i) {
-          a = triAtA(pos)
-          ata(i * rank + j) = a
-          ata(j * rank + i) = a
-          pos += 1
-          j += 1
-        }
-        ata(i * rank + i) += lambda
-        i += 1
-      }
-    }
-  }
-
-  /**
-   * Representing a normal equation to solve the following weighted least squares problem:
-   *
-   * minimize \sum,,i,, c,,i,, (a,,i,,^T^ x - b,,i,,)^2^ + lambda * x^T^ x.
-   *
-   * Its normal equation is given by
-   *
-   * \sum,,i,, c,,i,, (a,,i,, a,,i,,^T^ x - b,,i,, a,,i,,) + lambda * x = 0.
-   */
-  private class NormalEquation(val k: Int) extends Serializable {
-
-    /** Number of entries in the upper triangular part of a k-by-k matrix. */
-    val triK = k * (k + 1) / 2
-    /** A^T^ * A */
-    val ata = new Array[Double](triK)
-    /** A^T^ * b */
-    val atb = new Array[Double](k)
-
-    private val da = new Array[Double](k)
-    private val upper = "U"
-
-    private def copyToDouble(a: Array[Float]): Unit = {
-      var i = 0
-      while (i < k) {
-        da(i) = a(i)
-        i += 1
-      }
-    }
-
-    /** Adds an observation. */
-    def add(a: Array[Float], b: Double, c: Double = 1.0): this.type = {
-      require(c >= 0.0)
-      require(a.length == k)
-      copyToDouble(a)
-      blas.dspr(upper, k, c, da, 1, ata)
-      if (b != 0.0) {
-        blas.daxpy(k, c * b, da, 1, atb, 1)
-      }
-      this
-    }
-
-    /** Merges another normal equation object. */
-    def merge(other: NormalEquation): this.type = {
-      require(other.k == k)
-      blas.daxpy(ata.length, 1.0, other.ata, 1, ata, 1)
-      blas.daxpy(atb.length, 1.0, other.atb, 1, atb, 1)
-      this
-    }
-
-    /** Resets everything to zero, which should be called after each solve. */
-    def reset(): Unit = {
-      ju.Arrays.fill(ata, 0.0)
-      ju.Arrays.fill(atb, 0.0)
-    }
-  }
 
   /**
    * Factor block that stores factors (Array[Float]) in an Array.
@@ -364,6 +101,17 @@ object PNCG extends Logging {
    * src factors in this block to send to dst block 0.
    */
   private type OutBlock = Array[Array[Int]]
+
+  private type FactorRDD = RDD[(Int,FactorBlock)]
+
+  private type FacTup = (FactorRDD,FactorRDD) // (user,items)
+
+
+  private def logStdout(msg: String): Unit = {
+		val time: Long = System.currentTimeMillis;
+		logInfo(msg);
+		println(time + ": " + msg);
+	}
 
   /**
    * In-link block for computing src (user/item) factors. This includes the original src IDs
