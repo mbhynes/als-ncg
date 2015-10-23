@@ -1194,7 +1194,7 @@ object NCG extends Logging {
       // p_{k+1} = -g + \beta * p_k
       direcUser = {
         if (beta_pncg < 0) {
-          logStdout(s"PNCG: beta < 0 in iter $iter: Restarting with steepest descent")
+          /*logStdout(s"PNCG: beta < 0 in iter $iter: Restarting with steepest descent")*/
           gradUser_pc.mapValues{x => blockSCAL(x,-1.0f)}
         } else {
           rddAXPBY(-1.0f,gradUser_pc,beta_pncg,direcUser)
@@ -1598,7 +1598,7 @@ object NCG extends Logging {
       // p_{k+1} = -g + \beta * p_k
       direcUser = {
         if (beta_pncg < 0) {
-          logStdout(s"PNCG: beta < 0 in iter $iter: Restarting with steepest descent")
+          /*logStdout(s"PNCG: beta < 0 in iter $iter: Restarting with steepest descent")*/
           gradUser.mapValues{x => blockSCAL(x,-1.0f)}
         } else {
           rddAXPBY(-1.0f,gradUser,beta_pncg,direcUser)
@@ -1842,7 +1842,6 @@ object NCG extends Logging {
         srcBlockId: Int, 
         tup: (OutBlock, FactorBlock)) = 
     {
-
       val block = tup._1
       val factors = tup._2
       block

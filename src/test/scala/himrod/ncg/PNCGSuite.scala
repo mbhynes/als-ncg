@@ -88,7 +88,7 @@ class NCGSuite extends FunSuite with LocalSparkContext {
   val implicitPrefs = false
   val negativeWeights = false
   val negativeFactors = true
-  val iters = 20
+  val iters = 10
   /*val (sampledRatings, trueRatings, truePrefs) = NCGSuite.generateRatings(users, products,*/
   /*    rank, samplingRate, implicitPrefs, negativeWeights, negativeFactors)*/
   /*val R = sc.parallelize(sampledRatings)*/
