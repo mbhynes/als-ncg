@@ -11,8 +11,9 @@ import scala.util.Random
 import org.apache.log4j.Logger
 import org.apache.log4j.Level
 
-import org.apache.spark.rdd.RDD
 import org.apache.spark.mllib.recommendation.MatrixFactorizationModel
+import org.apache.spark.rdd.RDD
+import org.apache.spark.storage.StorageLevel
 
 import org.jblas.DoubleMatrix
 
@@ -81,9 +82,9 @@ class NCGSuite extends FunSuite with LocalSparkContext {
 
   val regParam = 1e-3
   val threshold = 0.1
-  val users = 500
-  val products = 100
-  val rank = 10
+  val users = 100
+  val products = 300
+  val rank = 15
   val samplingRate = 1.0
   val implicitPrefs = false
   val negativeWeights = false
@@ -107,166 +108,35 @@ class NCGSuite extends FunSuite with LocalSparkContext {
     val (userFactors,itemFactors) = NCG.trainALS(R,rank,maxIter=iters,regParam=regParam)
     testRMSE(rank,trueRatings,truePrefs,userFactors,itemFactors,threshold,implicitPrefs)
   }
-  /*test("NCG, f=10"){*/
-  /*  val (sampledRatings, trueRatings, truePrefs) = NCGSuite.generateRatings(users, products,*/
-  /*      rank, samplingRate, implicitPrefs, negativeWeights, negativeFactors)*/
-  /*  val R = sc.parallelize(sampledRatings)*/
-  /*  val (userFactors,itemFactors) = NCG.trainNCG(R,rank,maxIter=iters,regParam=regParam)*/
-  /*  testRMSE(rank,trueRatings,truePrefs,userFactors,itemFactors,threshold,implicitPrefs)*/
-  /*}*/
+  test("pseudorandomness") {
+    val (sampledRatings, trueRatings, truePrefs) = NCGSuite.generateRatings(users, products,
+        rank, samplingRate, implicitPrefs, negativeWeights, negativeFactors)
+    val ratings = sc.parallelize(sampledRatings,2)
 
-  /*test("rank-1 matrices") {*/
-  /*  testPNCG(50, 100, 1, 15, 0.7, 0.3)*/
-  /*}*/
+    /*val ratings = sc.parallelize(NCGSuite.generateRatings(10, 20, 5, 0.5, false, false)._1, 2)*/
+    val model11 = NCG.trainPNCG(ratings,rank,maxIter=1,seed=1)
+    val model12 = NCG.trainPNCG(ratings,rank,maxIter=1,seed=1)
+    val u11 = model11._1.values.flatMap(_.toList).collect().toList
+    val u12 = model12._1.values.flatMap(_.toList).collect().toList
+    val model2 = NCG.trainPNCG(ratings,rank,maxIter=1,seed=2)
+    val u2 = model2._1.values.flatMap(_.toList).collect().toList
+    assert(u11 == u12)
+    assert(u11 != u2)
+  }
 
-  /*test("rank-1 matrices bulk") {*/
-  /*  testPNCG(50, 100, 1, 15, 0.7, 0.3, false, true)*/
-  /*}*/
+  test("Storage Level for RDDs in model") {
+    val R = sc.parallelize(NCGSuite.generateRatings(10, 20, 5, 0.5, false, false)._1, 2)
+    var storageLevel = StorageLevel.MEMORY_ONLY
+    val (userFactors,itemFactors) = NCG.trainPNCG(R,rank,maxIter=1,regParam=regParam,finalRDDStorageLevel=storageLevel)
+    assert(userFactors.getStorageLevel == storageLevel);
+    assert(itemFactors.getStorageLevel == storageLevel);
 
-  /*test("rank-2 matrices") {*/
-  /*  testPNCG(100, 200, 2, 15, 0.7, 0.3)*/
-  /*}*/
+    storageLevel = StorageLevel.DISK_ONLY
+    val (ufac,ifac) = NCG.trainPNCG(R,rank,maxIter=1,regParam=regParam,finalRDDStorageLevel=storageLevel)
+    assert(ufac.getStorageLevel == storageLevel);
+    assert(ifac.getStorageLevel == storageLevel);
+  }
 
-  /*test("rank-2 matrices bulk") {*/
-  /*  testPNCG(100, 200, 2, 15, 0.7, 0.3, false, true)*/
-  /*}*/
-
-  /*test("rank-1 matrices implicit") {*/
-  /*  testPNCG(80, 160, 1, 15, 0.7, 0.4, true)*/
-  /*}*/
-
-  /*test("rank-1 matrices implicit bulk") {*/
-  /*  testPNCG(80, 160, 1, 15, 0.7, 0.4, true, true)*/
-  /*}*/
-
-  /*test("rank-2 matrices implicit") {*/
-  /*  testPNCG(100, 200, 2, 15, 0.7, 0.4, true)*/
-  /*}*/
-
-  /*test("rank-2 matrices implicit bulk") {*/
-  /*  testPNCG(100, 200, 2, 15, 0.7, 0.4, true, true)*/
-  /*}*/
-
-  /*test("rank-2 matrices implicit negative") {*/
-  /*  testPNCG(100, 200, 2, 15, 0.7, 0.4, true, false, true)*/
-  /*}*/
-
-  /*test("rank-2 matrices with different user and product blocks") {*/
-  /*  testPNCG(100, 200, 2, 15, 0.7, 0.4, numUserBlocks = 4, numProductBlocks = 2)*/
-  /*}*/
-
-  /*test("pseudorandomness") {*/
-  /*  val ratings = sc.parallelize(PNCGSuite.generateRatings(10, 20, 5, 0.5, false, false)._1, 2)*/
-  /*  val model11 = PNCG.train(ratings, 5, 1, 1.0, 2, 1)*/
-  /*  val model12 = PNCG.train(ratings, 5, 1, 1.0, 2, 1)*/
-  /*  val u11 = model11.userFeatures.values.flatMap(_.toList).collect().toList*/
-  /*  val u12 = model12.userFeatures.values.flatMap(_.toList).collect().toList*/
-  /*  val model2 = PNCG.train(ratings, 5, 1, 1.0, 2, 2)*/
-  /*  val u2 = model2.userFeatures.values.flatMap(_.toList).collect().toList*/
-  /*  assert(u11 == u12)*/
-  /*  assert(u11 != u2)*/
-  /*}*/
-
-  /*test("Storage Level for RDDs in model") {*/
-  /*  val ratings = sc.parallelize(PNCGSuite.generateRatings(10, 20, 5, 0.5, false, false)._1, 2)*/
-  /*  var storageLevel = StorageLevel.MEMORY_ONLY*/
-  /*  var model = new PNCG()*/
-  /*    .setRank(5)*/
-  /*    .setIterations(1)*/
-  /*    .setLambda(1.0)*/
-  /*    .setBlocks(2)*/
-  /*    .setSeed(1)*/
-  /*    .setFinalRDDStorageLevel(storageLevel)*/
-  /*    .run(ratings)*/
-  /*  assert(model.productFeatures.getStorageLevel == storageLevel);*/
-  /*  assert(model.userFeatures.getStorageLevel == storageLevel);*/
-  /*  storageLevel = StorageLevel.DISK_ONLY*/
-  /*  model = new PNCG()*/
-  /*    .setRank(5)*/
-  /*    .setIterations(1)*/
-  /*    .setLambda(1.0)*/
-  /*    .setBlocks(2)*/
-  /*    .setSeed(1)*/
-  /*    .setFinalRDDStorageLevel(storageLevel)*/
-  /*    .run(ratings)*/
-  /*  assert(model.productFeatures.getStorageLevel == storageLevel);*/
-  /*  assert(model.userFeatures.getStorageLevel == storageLevel);*/
-  /*}*/
-
-  /*test("negative ids") {*/
-  /*  val data = PNCGSuite.generateRatings(50, 50, 2, 0.7, false, false)*/
-  /*  val ratings = sc.parallelize(data._1.map { case Rating(u, p, r) =>*/
-  /*    Rating(u - 25, p - 25, r)*/
-  /*  })*/
-  /*  val correct = data._2*/
-  /*  val model = PNCG.train(ratings, 5, 15)*/
-
-  /*  val pairs = Array.tabulate(50, 50)((u, p) => (u - 25, p - 25)).flatten*/
-  /*  val ans = model.predict(sc.parallelize(pairs)).collect()*/
-  /*  ans.foreach { r =>*/
-  /*    val u = r.user + 25*/
-  /*    val p = r.product + 25*/
-  /*    val v = r.rating*/
-  /*    val error = v - correct.get(u, p)*/
-  /*    assert(math.abs(error) < 0.4)*/
-  /*  }*/
-  /*}*/
-
-  /*test("NNPNCG, rank 2") {*/
-  /*  testPNCG(100, 200, 2, 15, 0.7, 0.4, false, false, false, -1, -1, false)*/
-  /*}*/
-
-  /**
-   * Test if we can correctly factorize R = U * P where U and P are of known rank.
-   *
-   * @param users number of users
-   * @param products number of products
-   * @param features number of features (rank of problem)
-   * @param iterations number of iterations to run
-   * @param samplingRate what fraction of the user-product pairs are known
-   * @param matchThreshold max difference allowed to consider a predicted rating correct
-   * @param implicitPrefs flag to test implicit feedback
-   * @param bulkPredict flag to test bulk predicition
-   * @param negativeWeights whether the generated data can contain negative values
-   * @param numUserBlocks number of user blocks to partition users into
-   * @param numProductBlocks number of product blocks to partition products into
-   * @param negativeFactors whether the generated user/product factors can have negative entries
-   */
-  // scalastyle:off
-  /*def runTest(*/
-  /*    users: Int,*/
-  /*    products: Int,*/
-  /*    features: Int,*/
-  /*    iterations: Int,*/
-  /*    samplingRate: Double,*/
-  /*    matchThreshold: Double,*/
-  /*    implicitPrefs: Boolean = false,*/
-  /*    bulkPredict: Boolean = false,*/
-  /*    negativeWeights: Boolean = false,*/
-  /*    numUserBlocks: Int = -1,*/
-  /*    numProductBlocks: Int = -1,*/
-  /*    negativeFactors: Boolean = true) {*/
-    // scalastyle:on
-
-    /*val (sampledRatings, trueRatings, truePrefs) = PNCGSuite.generateRatings(users, products,*/
-      /*features, samplingRate, implicitPrefs, negativeWeights, negativeFactors)*/
-    /*val (users,items) = PNCG.train(sampledRatings,features,10,10,iterations,0.01,implicitPrefs,1.0,false)*/
-    /*val R = sc.parallelize(sampledRatings)*/
-    /*val (userFactors,itemFactors) = PNCG.train(R,features,maxIter=iterations) //0.01,implicitPrefs,1.0,false)*/
-
-    /*val model = new PNCG()*/
-    /*  .setUserBlocks(numUserBlocks)*/
-    /*  .setProductBlocks(numProductBlocks)*/
-    /*  .setRank(features)*/
-    /*  .setIterations(iterations)*/
-    /*  .setAlpha(1.0)*/
-    /*  .setImplicitPrefs(implicitPrefs)*/
-    /*  .setLambda(0.01)*/
-    /*  .setSeed(0L)*/
-    /*  .setNonnegative(!negativeFactors)*/
-    /*  .run(sc.parallelize(sampledRatings))*/
-/**/
-/*    */
   def testRMSE(
     rank: Int,
     trueRatings: DoubleMatrix,
@@ -308,14 +178,8 @@ class NCGSuite extends FunSuite with LocalSparkContext {
         val correct = trueRatings.get(u, p)
         val diff = (prediction - correct)
         sse += diff * diff
-        /*println(s"R_($u,$p) = $correct; predicted $prediction")*/
         if (math.abs(prediction - correct) > threshold) {
           fail(s"Model failed on: R_($u,$p) = $correct; predicted $prediction")
-          /*fail(("Model failed to predict (%d, %d): %f vs %f\ncorr")*/
-          /*  .format(u, p, correct, prediction))*/
-          /*fail(("Model failed to predict (%d, %d): %f vs %f\ncorr: %s\npred: %s\nU: %s\n P: %s")*/
-          /*  .format(u, p, correct, prediction, trueRatings, predictedRatings, predictedU,*/
-              /*predictedP))*/
         }
       }
       println(s"rmse: ${math.sqrt(1.0/(users*products) * sse)}")
@@ -333,8 +197,6 @@ class NCGSuite extends FunSuite with LocalSparkContext {
       }
       val rmse = math.sqrt(sqErr / denom)
       if (rmse > threshold) {
-        /*fail("Model failed to predict RMSE: %f\ncorr: %s\npred: %s\nU: %s\n P: %s".format(*/
-        /*  rmse, truePrefs, predictedRatings, predictedU, predictedP))*/
         fail(s"Model failed to predict RMSE: $rmse")
       }
     }

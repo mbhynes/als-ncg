@@ -165,7 +165,7 @@ object NCG extends Logging {
     inBlocks.map { case (srcBlockId, inBlock) =>
       val random = new XORShiftRandom(byteswap64(seed ^ srcBlockId))
       val factors = Array.fill(inBlock.srcIds.length) {
-        val factor = Array.fill(rank)(random.nextGaussian().toFloat)
+        val factor = Array.fill(rank)(math.abs(random.nextGaussian()).toFloat)
         val nrm = blas.snrm2(rank, factor, 1)
         blas.sscal(rank, 1.0f / nrm, factor, 1)
         factor
@@ -894,8 +894,9 @@ object NCG extends Logging {
     val numUsers = computeDimension(userInBlocks);
     val numItems = computeDimension(itemInBlocks);
     /*val dof: Float = 1.0f * rank * (numUsers + numItems)*/
+    // dof == degrees of freedom for normalization (only affects output printing)
     val dof: Float = 1.0f
-    logStdout(s"PNCG: Computing factors for $numUsers users and $numItems items: dof=$dof")
+    logStdout(s"PNCG: Computing factors for $numUsers users and $numItems items: dof=${rank*(numUsers+numItems)}")
 
     var userCheckpointFile: Option[String] = None
     var itemCheckpointFile: Option[String] = None
@@ -1093,10 +1094,8 @@ object NCG extends Logging {
     var users = initialize(userInBlocks, rank, seedGen.nextLong()).cache
     var items = initialize(itemInBlocks, rank, seedGen.nextLong()).cache
 
-    /*logStdout("PNCG: 0: " + (users.count + items.count))*/
-
     var users_pc: FactorRDD = preconditionUsers(items).cache()
-    var items_pc: FactorRDD = preconditionItems(users_pc)
+    var items_pc: FactorRDD = preconditionItems(users_pc).cache()
 
     // compute preconditioned gradients; g = x - x_pc
     var gradUser_pc: FactorRDD = rddAXPY(-1.0f,users_pc,users).cache()
@@ -1125,13 +1124,13 @@ object NCG extends Logging {
     var beta_pncg: Float = gradTgrad
     var alpha_pncg: Float = alpha0
 
-    /*logStdout(s"PNCG: 0: $alpha_pncg: $beta_pncg: ${1/dof*math.sqrt(rddNORMSQR(gradUser)+rddNORMSQR(gradItem))}: ${costFunc((users,items))}")*/
+    logStdout(s"PNCG: 0: $alpha_pncg: $beta_pncg: ${1/dof*math.sqrt(rddNORMSQR(gradUser)+rddNORMSQR(gradItem))}: ${costFunc((users,items))}")
     for (iter <- 1 to maxIter) 
     {
       val (step,loss) = computeAlpha(users,items,direcUser,direcItem,gradUser,gradItem,
         alpha0,
         1e-8f,
-        20,
+        10,
         itemLocalIndexEncoder
       )
       alpha_pncg = step
@@ -1139,13 +1138,8 @@ object NCG extends Logging {
       // x_{k+1} = x_k + \alpha * p_k
       users = rddAXPY(alpha_pncg, direcUser, users).cache()
       items = rddAXPY(alpha_pncg, direcItem, items).cache()
-      /*logStdout(s"PNCG: updated users with ${users.count} partitions")*/
-      /*logStdout(s"PNCG: updated items with ${items.count} partitions")*/
 
-      /*if (sc.checkpointDir.isDefined && (iter % checkpointInterval == 0))*/
       if (shouldCheckpoint(iter)) {
-      /*if (iter % checkpointInterval == 0)*/
-      /*{*/
         logStdout(s"PNCG: Checkpointing users/items at iter $iter")
         users.checkpoint()
         items.checkpoint()
@@ -1171,11 +1165,12 @@ object NCG extends Logging {
       gradUser = evalGradient(items,users,itemOutBlocks,userInBlocks,rank,regParam,itemLocalIndexEncoder,implicitPrefs,alpha).cache()
       gradItem = evalGradient(users,items,userOutBlocks,itemInBlocks,rank,regParam,userLocalIndexEncoder,implicitPrefs,alpha).cache()
 
-      gradTgrad = rddDOT(gradUser,gradUser_pc) + rddDOT(gradItem,gradItem_pc);
+      /*gradTgrad = rddDOT(gradUser,gradUser_pc) + rddDOT(gradItem,gradItem_pc);*/
+      gradTgrad = rddDOT(gradUser_pc,gradUser) + rddDOT(gradItem_pc,gradItem);
 
       //original beta_pncg version:
       beta_pncg = (gradTgrad - (rddDOT(gradUser,gradUser_pc_old) + rddDOT(gradItem,gradItem_pc_old)) ) / gradTgrad_old
-      /*beta_pncg = (gradTgrad - (rddDOT(gradUser_old,gradUser_pc) + rddDOT(gradItem_old,gradItem_pc)) ) / gradTgrad_old*/
+      /*beta_pncg = (gradTgrad - (rddDOT(gradUser_pc,gradUser_old) + rddDOT(gradItem_pc,gradItem_old)) ) / gradTgrad_old*/
 
       // compute the restart condition from Nocedal & Wright, Numerical Optimization 2006
       /*val shouldRestart: Boolean = {*/
@@ -1326,7 +1321,7 @@ object NCG extends Logging {
     val numItems = computeDimension(itemInBlocks);
     /*val dof: Float = 1.0f * rank * (numUsers + numItems)*/
     val dof: Float = 1.0f
-    logStdout(s"PNCG: Computing factors for $numUsers users and $numItems items: dof=$dof")
+    logStdout(s"NCG: Computing factors for $numUsers users and $numItems items: dof=${rank*(numUsers+numItems)}")
 
     var userCheckpointFile: Option[String] = None
     var itemCheckpointFile: Option[String] = None
@@ -2366,7 +2361,7 @@ object NCG extends Logging {
     val numItems = computeDimension(itemInBlocks);
     /*val dof: Float = 1.0f * rank * (numUsers + numItems)*/
     val dof: Float = 1.0f;
-    logStdout(s"PNCG: Computing factors for $numUsers users and $numItems items: dof=$dof")
+    logStdout(s"ALS: Computing factors for $numUsers users and $numItems items: dof=${rank*(numUsers+numItems)}")
 
     def costFunc(x: FacTup): Float =
     {
@@ -2446,7 +2441,7 @@ object NCG extends Logging {
         logStdout(s"ALS: $iter: ${1/dof * math.sqrt(rddNORMSQR(gradItem))}: ${costFunc((userFactors,itemFactors))}")
       }
     } else {
-      for (iter <- 1 until maxIter) {
+      for (iter <- 1 to maxIter) {
         itemFactors = computeFactors(userFactors, userOutBlocks, itemInBlocks, rank, regParam,
           userLocalIndexEncoder, solver = solver).cache
         if (shouldCheckpoint(iter)) {
