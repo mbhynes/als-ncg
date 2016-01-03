@@ -31,61 +31,62 @@ To use ALS-NCG in a Spark program, once the package has been imported, the routi
 ### Running ALS-NCG from the Commandline
 The `NCG` object contains a `main` routine that parses commandline arguments for parameter flags if the ALS-NCG algorithm is run using `spark-submit`, which is a typical use case for performance testing. The relevant flags for this are in the following code snippet:
 ```scala
-	private def parseArgs(map: ArgMap, list: List[String]) : ArgMap = 
-	{
-		list match {
-			case Nil => map
+private def parseArgs(map: ArgMap, list: List[String]) : ArgMap = 
+{
+	list match {
+		case Nil => map
 
-			// flag to run standalone ALS
-      case ("--als") :: tail =>
-        parseArgs(map ++ argToMap("runALS","true"), tail)
+	// flag to run standalone ALS
+	case ("--als") :: tail =>
+		parseArgs(map ++ argToMap("runALS","true"), tail)
 
-			// flag to run standalone NCG
-      case ("--ncg") :: tail =>
-        parseArgs(map ++ argToMap("runNCG","true"), tail)
+	// flag to run standalone NCG
+	case ("--ncg") :: tail =>
+		parseArgs(map ++ argToMap("runNCG","true"), tail)
 
-			// specify the number of blocks for user feature vectors
-			case ("--userBlocks" | "-N") :: value :: tail =>
-        parseArgs(map ++ argToMap("userBlocks",value), tail)
+	// specify the number of blocks for user feature vectors
+	case ("--userBlocks" | "-N") :: value :: tail =>
+		parseArgs(map ++ argToMap("userBlocks",value), tail)
 
-			// specify the number of blocks for item feature vectors
-			case ("--itemBlocks" | "-M") :: value :: tail =>
-        parseArgs(map ++ argToMap("itemBlocks",value), tail)
+	// specify the number of blocks for item feature vectors
+	case ("--itemBlocks" | "-M") :: value :: tail =>
+		parseArgs(map ++ argToMap("itemBlocks",value), tail)
 
-			// set the seed for initialization of feature vectors
-			case ("--seed" | "-s") :: value :: tail =>
-        parseArgs(map ++ argToMap("seed",value), tail)
+	// set the seed for initialization of feature vectors
+	case ("--seed" | "-s") :: value :: tail =>
+		parseArgs(map ++ argToMap("seed",value), tail)
 
-			// set the value of the regularization parameter 
-			case ("--lambda" | "-L") :: value :: tail =>
-        parseArgs(map ++ argToMap("regParam",value), tail)
+	// set the value of the regularization parameter 
+	case ("--lambda" | "-L") :: value :: tail =>
+		parseArgs(map ++ argToMap("regParam",value), tail)
 
-			// set rank of the feature space
-			case ("--rank" | "-f") :: value :: tail =>
-        parseArgs(map ++ argToMap("rank",value), tail)
+	// set rank of the feature space
+	case ("--rank" | "-f") :: value :: tail =>
+		parseArgs(map ++ argToMap("rank",value), tail)
 
-			// specify the path to the ratings file 
-			case ("--ratings" | "-R") :: value :: tail =>
-        parseArgs(map ++ argToMap("ratingsFile",value), tail)
+	// specify the path to the ratings file 
+	case ("--ratings" | "-R") :: value :: tail =>
+		parseArgs(map ++ argToMap("ratingsFile",value), tail)
 
-			// specify the delimiter in the ratings file (default is ",")
-			case ("--delim" | "-d") :: value :: tail =>
-				parseArgs(map ++ argToMap("delim", value), tail)
+	// specify the delimiter in the ratings file (default is ",")
+	case ("--delim" | "-d") :: value :: tail =>
+		parseArgs(map ++ argToMap("delim", value), tail)
 
-			// set the number of iterations to run
-			case ("--maxit" | "-k") :: value :: tail =>
-        parseArgs(map ++ argToMap("numIters",value), tail)
+	// set the number of iterations to run
+	case ("--maxit" | "-k") :: value :: tail =>
+		parseArgs(map ++ argToMap("numIters",value), tail)
 
-			// set the SparkContext checkpoint directory
-      case ("--checkpoint" | "-C") :: value :: tail =>
-				parseArgs(map ++ argToMap("checkpointDir", value), tail)
+	// set the SparkContext checkpoint directory
+	case ("--checkpoint" | "-C") :: value :: tail =>
+		parseArgs(map ++ argToMap("checkpointDir", value), tail)
 ```
+
 If neither the `--als` or `--ncg` flags are given, the ALS-NCG algorithm will be run.
 The ratings file is expected to have the form of `i,j,R_{ij}` on each line, where the delimeter can be specified as any string.
 
-When invoking the ALS-NCG algorithm from the commandline with `spark-submit`, the arguments are passed as strings appended to the commandline after the `NCG` jar pathname. An example invocation is the following bash snippet, where the relevant environment variables have been set (here, `$JAR` is the path to the packaged `NCG` jar on your system):
+When invoking the ALS-NCG algorithm from the commandline with `spark-submit`, the arguments are passed as strings appended to the commandline after the `NCG` jar pathname. An example invocation is the following bash snippet, where the relevant environment variables have been set (i.e., `$JAR` is the path to the packaged `NCG` jar on your system):
 
-```bash
+```sh
 spark-submit \                                                                                
 	--deploy-mode $SPARK_DEPLOY_MODE \
 	--name $NAME \
