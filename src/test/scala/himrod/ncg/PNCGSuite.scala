@@ -108,6 +108,13 @@ class NCGSuite extends FunSuite with LocalSparkContext {
     val (userFactors,itemFactors) = NCG.trainALS(R,rank,maxIter=iters,regParam=regParam)
     testRMSE(rank,trueRatings,truePrefs,userFactors,itemFactors,threshold,implicitPrefs)
   }
+  test("Testing DSGD"){
+    val (sampledRatings, trueRatings, truePrefs) = NCGSuite.generateRatings(users, products,
+        rank, samplingRate, implicitPrefs, negativeWeights, negativeFactors)
+    val R = sc.parallelize(sampledRatings)
+    val (userFactors,itemFactors) = NCG.trainSGD(R,rank,maxIter=iters,stepsize=0.1,regParam=regParam)
+    testRMSE(rank,trueRatings,truePrefs,userFactors,itemFactors,threshold,implicitPrefs)
+  }
   test("pseudorandomness") {
     val (sampledRatings, trueRatings, truePrefs) = NCGSuite.generateRatings(users, products,
         rank, samplingRate, implicitPrefs, negativeWeights, negativeFactors)

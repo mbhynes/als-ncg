@@ -59,6 +59,7 @@ import java.io.IOException
 
 import scala.collection.mutable
 import scala.reflect.ClassTag
+import scala.util.{Random => ScalaRandom}
 import scala.util.Sorting
 import scala.util.hashing.byteswap64
 
@@ -1813,6 +1814,138 @@ object NCG extends Logging {
    *
    * @return grad gradient vector 
    */
+  private def DSGD[ID](
+      srcFactorBlocks: RDD[(Int,(Int, FactorBlock))], // (i_b, (j_b,M_{j_b}))
+      currentFactorBlocks: RDD[(Int, FactorBlock)], // (i_b,U_{i_b})
+      /*srcOutBlocks: RDD[(Int, OutBlock)],*/
+      dstInBlocks: RDD[(Int, InBlock[ID])], // R_i (ratings wrt U_i)
+      rank: Int,
+      regParam: Double,
+      srcEncoder: LocalIndexEncoder,
+      implicitPrefs: Boolean = false,
+      alpha: Double = 1.0,
+      stepsize: Double = 1.0
+      ): (RDD[(Int, FactorBlock)],RDD[(Int, FactorBlock)]) = 
+  {
+    val numSrcBlocks = srcFactorBlocks.partitions.length
+
+    def runSGD(
+        block: InBlock[ID],  //{r_ij}
+        M_block: (Int,FactorBlock),
+        U: FactorBlock 
+        ): (FactorBlock,(Int,FactorBlock)) = 
+    {
+      /*val sortedSrcFactors = new Array[FactorBlock](numSrcBlocks)*/
+      /*factorList.foreach { case (srcBlockId, vec) =>*/
+      /*  sortedSrcFactors(srcBlockId) = vec*/
+      /*}*/
+      val len = block.srcIds.length
+
+      // initialize array of gradient vectors
+      /*val grad: Array[Array[Float]] = Array.fill(len)(Array.fill[Float](rank)(0f))*/
+      val j_b = M_block._1
+      val U_new = U.map{x => x.clone}
+      val M_new = M_block._2.map{x => x.clone}
+      var i = 0
+
+      // loop over all users {u_i}
+      val rand = new ScalaRandom()
+      val u_inds = rand.shuffle(0 to len - 1)
+      var row = 0
+      while (row < len) {
+        i = u_inds(row)
+        // loop over all input {m_j} in block
+
+        /*val m_inds = rand.shuffle(block.dstPtrs(i) until block.dstPtrs(i))*/
+        var j = block.dstPtrs(i)
+        var num_factors = 0
+        while (j < block.dstPtrs(i + 1)) 
+        {
+          val encoded = block.dstEncodedIndices(j)
+          val blockId = srcEncoder.blockId(encoded)
+          if (blockId == j_b) {
+            val localIndex = srcEncoder.localIndex(encoded)
+            val u_i = U_new(i).clone
+            val m_j = M_new(localIndex) //m_j
+            val r_ij = block.ratings(j)
+            // scale the src factor by a
+            val a: Float = { 
+              if (implicitPrefs) {
+                val p = if (r_ij > 0) 1f else 0f
+                val c = (1 + alpha * math.abs(r_ij)).toFloat
+                2*c*(blas.sdot(rank,u_i,1,m_j,1) - p)*stepsize.toFloat
+              } else {
+                2*(blas.sdot(rank,u_i,1,m_j,1) - r_ij)*stepsize.toFloat
+              }
+            }
+            // y := a*x + y 
+            blas.saxpy(rank,a,m_j,1,U_new(i),1)
+            blas.saxpy(rank,a,u_i,1,M_new(localIndex),1)
+            j += 1
+            num_factors += 1
+          }
+          row += 1
+        // add \lambda * n * u_i
+        /*val penaltyCoeff = {*/
+          /*if (implicitPrefs) */
+          /*  regParam.toFloat */
+          /*else */
+          /*  regParam.toFloat*num_factors*/
+        /*}*/
+        /*blas.saxpy(rank,2*penaltyCoeff,current(i),1,grad(i),1)*/
+        // finally, if implicit, add the term 2*YtY*x_u to the gradient
+        /*if (implicitPrefs) {*/
+          /*logStdout(s"Multiplying x with length ${current(i).length} by YtY with length ${YtY.length}");*/
+        /*  blas.sspmv("U",rank,2f,YtY,current(i),1,1f,grad(i),1)*/
+        /*}*/
+        /*i += 1*/
+        }
+      }
+      (U_new,(j_b,M_new))
+    }
+
+    /*val srcOut: RDD[(Int, Iterable[(Int,FactorBlock)]) ] = */
+    /*  srcOutBlocks*/
+      /*.join(srcFactorBlocks)*/
+      /*.flatMap{case (id,tuple) => filterFactorsToSend(id,tuple)}*/
+      /*.groupByKey(new ALSPartitioner(dstInBlocks.partitions.length))*/
+
+    val UM: RDD[(Int, (FactorBlock,(Int,FactorBlock)))] = dstInBlocks
+      .join(srcFactorBlocks) // (ib, (R_{ib}, (jb,M_jb)))
+      .join(currentFactorBlocks) // (ib, ((R_{ib}, (jb,M_jb)), U_ib) )
+      .mapValues{case ((r_i,m_j),u_i) => runSGD(r_i,m_j,u_i)}
+
+    val U = UM.map{case (i,(u,_)) => (i,u)}
+    val M = UM.map{case (_,(_,(j,m))) => (j,m)}
+      
+      /*.cogroup(srcOut,currentFactorBlocks)*/
+      //use .head since cogroup has produced Iterables
+      /*.mapValues{case (block,factorTuple,fac) => */
+      /*  computeGradientBlock(block.head,factorTuple.head,fac.head)*/
+      /*}*/
+    (U,M)
+  }
+
+  /**
+   * Evaluate the gradient function f(U,M), as in \cite{zhou2008largescale}
+   *
+   * Comments are written assuming the gradient WRT users is being calculated.
+   * For, e.g. the ith user u_i:
+   *  1/2 * df(u_i)/du_i = (M_i * M^T_i + \lambda * n_{u_i} )*u_i - M_{u_i}*R^T_{u_i}
+   *
+   * @param srcFactorBlocks src factors; the item factors, m_i
+   * @param currentFactorBlocks current user factors, u_i
+   * @param srcOutBlocks src out-blocks
+   * @param dstInBlocks dst in-blocks
+   * @param rank rank
+   * @param regParam regularization constant
+   * @param srcEncoder encoder for src local indices
+   * @param implicitPrefs whether to use implicit preference
+   * @param alpha the alpha constant in the implicit preference formulation
+   * @param solver solver for least squares problems
+   *
+   * @return grad gradient vector 
+   */
   private def evalGradient[ID](
       srcFactorBlocks: RDD[(Int, FactorBlock)],
       currentFactorBlocks: RDD[(Int, FactorBlock)],
@@ -2208,7 +2341,6 @@ object NCG extends Logging {
     result.toFloat
   }
 
-
   /**
    * Compute dst factors by constructing and solving least square problems.
    *
@@ -2491,6 +2623,196 @@ object NCG extends Logging {
     }
     (userIdAndFactors, itemIdAndFactors)
   }
+
+  /**
+   * Distributed Stochastic Gradient Descent
+   * 
+   */
+  def trainSGD[ID: ClassTag]( // scalastyle:ignore
+      ratings: RDD[Rating[ID]],
+      rank: Int = 10,
+      numUserBlocks: Int = 10,
+      numItemBlocks: Int = 10,
+      maxIter: Int = 10,
+      stepsize: Double = 0.1,
+      regParam: Double = 1e-2,
+      implicitPrefs: Boolean = false,
+      alpha: Double = 1.0,
+      nonnegative: Boolean = false,
+      intermediateRDDStorageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK,
+      finalRDDStorageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK,
+      checkpointInterval: Int = 10,
+      seed: Long = 0L)(
+      implicit ord: Ordering[ID]): (RDD[(ID, Array[Float])], RDD[(ID, Array[Float])]) = 
+  {
+    require(intermediateRDDStorageLevel != StorageLevel.NONE,
+      "ALS is not designed to run without persisting intermediate RDDs.")
+    val sc = ratings.sparkContext
+    val userPart = new ALSPartitioner(numUserBlocks)
+    val itemPart = new ALSPartitioner(numItemBlocks)
+    val userLocalIndexEncoder = new LocalIndexEncoder(userPart.numPartitions)
+    val itemLocalIndexEncoder = new LocalIndexEncoder(itemPart.numPartitions)
+    val solver = if (nonnegative) new NNLSSolver else new CholeskySolver
+    val blockRatings = partitionRatings(ratings, userPart, itemPart)
+      .persist(intermediateRDDStorageLevel)
+    val (userInBlocks, userOutBlocks, userCounts) =
+      makeBlocks("user", blockRatings, userPart, itemPart, intermediateRDDStorageLevel)
+    // materialize blockRatings and user blocks
+    userOutBlocks.count()
+    val swappedBlockRatings = blockRatings.map {
+      case ((userBlockId, itemBlockId), RatingBlock(userIds, itemIds, localRatings)) =>
+        ((itemBlockId, userBlockId), RatingBlock(itemIds, userIds, localRatings))
+    }
+    val (itemInBlocks, itemOutBlocks, itemCounts) =
+      makeBlocks("item", swappedBlockRatings, itemPart, userPart, intermediateRDDStorageLevel)
+    // materialize item blocks
+    itemOutBlocks.count()
+    val numUsers = computeDimension(userInBlocks);
+    val numItems = computeDimension(itemInBlocks);
+    /*val dof: Float = 1.0f * rank * (numUsers + numItems)*/
+    val dof: Float = 1.0f;
+    logStdout(s"ALS: Computing factors for $numUsers users and $numItems items: dof=${rank*(numUsers+numItems)}")
+
+    def costFunc(x: FacTup): Float =
+    {
+      /*logStdout("costFunc: _init_");*/
+      val usr = x._1
+      val itm = x._2
+      val sumSquaredErr: Float = evalFrobeniusCost(
+        itm, 
+        usr, 
+        itemOutBlocks, 
+        userInBlocks, 
+        rank, 
+        regParam,
+        itemLocalIndexEncoder
+      )  
+      /*logStdout("costFunc: var: sumSquaredErr: " + sumSquaredErr)*/
+      val usrNorm: Float = evalTikhonovNorm(
+        usr, 
+        userCounts,
+        rank,
+        regParam
+      ) 
+      /*logStdout("costFunc: var: usrNorm: " + usrNorm)*/
+      val itmNorm: Float = evalTikhonovNorm(
+        itm, 
+        itemCounts,
+        rank,
+        regParam
+      )
+      /*logStdout("costFunc: var: itmNorm: " + itmNorm)*/
+      /*logStdout("costFunc: " + (sumSquaredErr + usrNorm + itmNorm))*/
+      sumSquaredErr + usrNorm + itmNorm
+    }
+
+    val seedGen = new XORShiftRandom(seed)
+    var userFactors = initialize(userInBlocks, rank, seedGen.nextLong())
+    var itemFactors = initialize(itemInBlocks, rank, seedGen.nextLong())
+    var previousCheckpointFile: Option[String] = None
+    val shouldCheckpoint: Int => Boolean = (iter) =>
+      (sc.getCheckpointDir.isDefined && (iter % checkpointInterval == 0))
+
+    val deletePreviousCheckpointFile: () => Unit = () =>
+      previousCheckpointFile.foreach { file =>
+        try {
+          FileSystem.get(sc.hadoopConfiguration).delete(new Path(file), true)
+        } catch {
+          case e: IOException =>
+            logWarning(s"Cannot delete checkpoint file $file:", e)
+        }
+      }
+
+    var gradItem = evalGradient(userFactors,itemFactors,userOutBlocks,itemInBlocks,rank,regParam,userLocalIndexEncoder,implicitPrefs,alpha)
+    var gradUser = evalGradient(itemFactors,userFactors,itemOutBlocks,userInBlocks,rank,regParam,itemLocalIndexEncoder,implicitPrefs,alpha)
+    logStdout(s"ALS: 0: ${1/dof * math.sqrt(rddNORMSQR(gradUser) + rddNORMSQR(gradItem))}: ${costFunc((userFactors,itemFactors))}")
+    /*if (implicitPrefs) {*/
+    /*  for (iter <- 1 to maxIter) {*/
+    /*    userFactors.setName(s"userFactors-$iter").persist(intermediateRDDStorageLevel)*/
+    /*    val previousItemFactors = itemFactors*/
+    /*    itemFactors = computeFactors(userFactors, userOutBlocks, itemInBlocks, rank, regParam,*/
+    /*      userLocalIndexEncoder, implicitPrefs, alpha, solver)*/
+    /*    previousItemFactors.unpersist()*/
+    /*    itemFactors.setName(s"itemFactors-$iter").persist(intermediateRDDStorageLevel)*/
+    /*    // TODO: Generalize PeriodicGraphCheckpointer and use it here.*/
+    /*    if (shouldCheckpoint(iter)) {*/
+    /*      itemFactors.checkpoint() // itemFactors gets materialized in computeFactors.*/
+    /*    }*/
+    /*    val previousUserFactors = userFactors*/
+    /*    userFactors = computeFactors(itemFactors, itemOutBlocks, userInBlocks, rank, regParam,*/
+    /*      itemLocalIndexEncoder, implicitPrefs, alpha, solver)*/
+    /*    if (shouldCheckpoint(iter)) {*/
+    /*      deletePreviousCheckpointFile()*/
+    /*      previousCheckpointFile = itemFactors.getCheckpointFile*/
+    /*    }*/
+    /*    previousUserFactors.unpersist()*/
+
+    /*    gradItem = evalGradient(userFactors,itemFactors,userOutBlocks,itemInBlocks,rank,regParam,userLocalIndexEncoder,implicitPrefs,alpha)*/
+    /*    logStdout(s"ALS: $iter: ${1/dof * math.sqrt(rddNORMSQR(gradItem))}: ${costFunc((userFactors,itemFactors))}")*/
+    /*  }*/
+    /*} else {*/
+
+    for (iter <- 1 to maxIter) {
+      // loop over all partitions of the ratings matrix
+
+      for (stratum <- 0 until numItemBlocks) {
+        // repartition the item blocks to coincide with the user blocks
+        val shuffledItemFactors: RDD[(Int,(Int,FactorBlock))] = itemFactors
+          .map{ case (j,block) => ((j+stratum) % numItemBlocks,(j,block))}
+          .partitionBy(new ALSPartitioner(numUserBlocks))
+
+        val (u,m) = DSGD(shuffledItemFactors,userFactors,userInBlocks,rank,regParam,
+          itemLocalIndexEncoder,implicitPrefs,alpha,stepsize)
+         userFactors = u.cache
+         itemFactors = m.cache
+
+        if (shouldCheckpoint(iter)) {
+          itemFactors.checkpoint()
+          itemFactors.count() // checkpoint item factors and cut lineage
+          deletePreviousCheckpointFile()
+          previousCheckpointFile = itemFactors.getCheckpointFile
+        }
+
+        gradItem = evalGradient(userFactors,itemFactors,userOutBlocks,itemInBlocks,rank,regParam,userLocalIndexEncoder,implicitPrefs,alpha)
+        gradUser = evalGradient(itemFactors,userFactors,itemOutBlocks,userInBlocks,rank,regParam,itemLocalIndexEncoder,implicitPrefs,alpha)
+        logStdout(s"ALS: $iter.$stratum: ${1/dof * math.sqrt(rddNORMSQR(gradUser)+rddNORMSQR(gradItem))}: ${costFunc((userFactors,itemFactors))}")
+      }
+    }
+    val userIdAndFactors = userInBlocks
+      .mapValues(_.srcIds)
+      .join(userFactors)
+      .mapPartitions({ items =>
+        items.flatMap { case (_, (ids, factors)) =>
+          ids.view.zip(factors)
+        }
+      // Preserve the partitioning because IDs are consistent with the partitioners in userInBlocks
+      // and userFactors.
+      }, preservesPartitioning = true)
+      .setName("userFactors")
+      .persist(finalRDDStorageLevel)
+    val itemIdAndFactors = itemInBlocks
+      .mapValues(_.srcIds)
+      .join(itemFactors)
+      .mapPartitions({ items =>
+        items.flatMap { case (_, (ids, factors)) =>
+          ids.view.zip(factors)
+        }
+      }, preservesPartitioning = true)
+      .setName("itemFactors")
+      .persist(finalRDDStorageLevel)
+    if (finalRDDStorageLevel != StorageLevel.NONE) {
+      userIdAndFactors.count()
+      itemFactors.unpersist()
+      itemIdAndFactors.count()
+      userInBlocks.unpersist()
+      userOutBlocks.unpersist()
+      itemInBlocks.unpersist()
+      itemOutBlocks.unpersist()
+      blockRatings.unpersist()
+    }
+    (userIdAndFactors, itemIdAndFactors)
+  }
+
   private def computeDimension[ID](inBlocks: RDD[(Int, InBlock[ID])]): Int = {
     inBlocks.values.map{block => block.srcIds.length}.treeReduce(_+_)
   }
