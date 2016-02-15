@@ -82,14 +82,14 @@ class NCGSuite extends FunSuite with LocalSparkContext {
 
   val regParam = 1e-3
   val threshold = 0.1
-  val users = 100
-  val products = 300
-  val rank = 15
+  val users = 300
+  val products = 1000
+  val rank = 30
   val samplingRate = 1.0
   val implicitPrefs = false
   val negativeWeights = false
   val negativeFactors = true
-  val iters = 10
+  val iters = 20 
   /*val (sampledRatings, trueRatings, truePrefs) = NCGSuite.generateRatings(users, products,*/
   /*    rank, samplingRate, implicitPrefs, negativeWeights, negativeFactors)*/
   /*val R = sc.parallelize(sampledRatings)*/
@@ -101,48 +101,48 @@ class NCGSuite extends FunSuite with LocalSparkContext {
     val (userFactors,itemFactors) = NCG.trainPNCG(R,rank,maxIter=iters,regParam=regParam)
     testRMSE(rank,trueRatings,truePrefs,userFactors,itemFactors,threshold,implicitPrefs)
   }
-  test("Testing ALS"){
-    val (sampledRatings, trueRatings, truePrefs) = NCGSuite.generateRatings(users, products,
-        rank, samplingRate, implicitPrefs, negativeWeights, negativeFactors)
-    val R = sc.parallelize(sampledRatings)
-    val (userFactors,itemFactors) = NCG.trainALS(R,rank,maxIter=iters,regParam=regParam)
-    testRMSE(rank,trueRatings,truePrefs,userFactors,itemFactors,threshold,implicitPrefs)
-  }
+  /*test("Testing ALS"){*/
+  /*  val (sampledRatings, trueRatings, truePrefs) = NCGSuite.generateRatings(users, products,*/
+  /*      rank, samplingRate, implicitPrefs, negativeWeights, negativeFactors)*/
+  /*  val R = sc.parallelize(sampledRatings)*/
+  /*  val (userFactors,itemFactors) = NCG.trainALS(R,rank,maxIter=iters,regParam=regParam)*/
+  /*  testRMSE(rank,trueRatings,truePrefs,userFactors,itemFactors,threshold,implicitPrefs)*/
+  /*}*/
   test("Testing DSGD"){
     val (sampledRatings, trueRatings, truePrefs) = NCGSuite.generateRatings(users, products,
         rank, samplingRate, implicitPrefs, negativeWeights, negativeFactors)
     val R = sc.parallelize(sampledRatings)
-    val (userFactors,itemFactors) = NCG.trainSGD(R,rank,maxIter=iters,stepsize=0.1,regParam=regParam)
+    val (userFactors,itemFactors) = NCG.trainSGD(R,rank,maxIter=iters,stepsize=.01,regParam=regParam)
     testRMSE(rank,trueRatings,truePrefs,userFactors,itemFactors,threshold,implicitPrefs)
   }
-  test("pseudorandomness") {
-    val (sampledRatings, trueRatings, truePrefs) = NCGSuite.generateRatings(users, products,
-        rank, samplingRate, implicitPrefs, negativeWeights, negativeFactors)
-    val ratings = sc.parallelize(sampledRatings,2)
+  /*test("pseudorandomness") {*/
+  /*  val (sampledRatings, trueRatings, truePrefs) = NCGSuite.generateRatings(users, products,*/
+  /*      rank, samplingRate, implicitPrefs, negativeWeights, negativeFactors)*/
+  /*  val ratings = sc.parallelize(sampledRatings,2)*/
 
-    /*val ratings = sc.parallelize(NCGSuite.generateRatings(10, 20, 5, 0.5, false, false)._1, 2)*/
-    val model11 = NCG.trainPNCG(ratings,rank,maxIter=1,seed=1)
-    val model12 = NCG.trainPNCG(ratings,rank,maxIter=1,seed=1)
-    val u11 = model11._1.values.flatMap(_.toList).collect().toList
-    val u12 = model12._1.values.flatMap(_.toList).collect().toList
-    val model2 = NCG.trainPNCG(ratings,rank,maxIter=1,seed=2)
-    val u2 = model2._1.values.flatMap(_.toList).collect().toList
-    assert(u11 == u12)
-    assert(u11 != u2)
-  }
+  /*  /*val ratings = sc.parallelize(NCGSuite.generateRatings(10, 20, 5, 0.5, false, false)._1, 2)*/*/
+  /*  val model11 = NCG.trainPNCG(ratings,rank,maxIter=1,seed=1)*/
+  /*  val model12 = NCG.trainPNCG(ratings,rank,maxIter=1,seed=1)*/
+  /*  val u11 = model11._1.values.flatMap(_.toList).collect().toList*/
+  /*  val u12 = model12._1.values.flatMap(_.toList).collect().toList*/
+  /*  val model2 = NCG.trainPNCG(ratings,rank,maxIter=1,seed=2)*/
+  /*  val u2 = model2._1.values.flatMap(_.toList).collect().toList*/
+  /*  assert(u11 == u12)*/
+  /*  assert(u11 != u2)*/
+  /*}*/
 
-  test("Storage Level for RDDs in model") {
-    val R = sc.parallelize(NCGSuite.generateRatings(10, 20, 5, 0.5, false, false)._1, 2)
-    var storageLevel = StorageLevel.MEMORY_ONLY
-    val (userFactors,itemFactors) = NCG.trainPNCG(R,rank,maxIter=1,regParam=regParam,finalRDDStorageLevel=storageLevel)
-    assert(userFactors.getStorageLevel == storageLevel);
-    assert(itemFactors.getStorageLevel == storageLevel);
+  /*test("Storage Level for RDDs in model") {*/
+  /*  val R = sc.parallelize(NCGSuite.generateRatings(10, 20, 5, 0.5, false, false)._1, 2)*/
+  /*  var storageLevel = StorageLevel.MEMORY_ONLY*/
+  /*  val (userFactors,itemFactors) = NCG.trainPNCG(R,rank,maxIter=1,regParam=regParam,finalRDDStorageLevel=storageLevel)*/
+  /*  assert(userFactors.getStorageLevel == storageLevel);*/
+  /*  assert(itemFactors.getStorageLevel == storageLevel);*/
 
-    storageLevel = StorageLevel.DISK_ONLY
-    val (ufac,ifac) = NCG.trainPNCG(R,rank,maxIter=1,regParam=regParam,finalRDDStorageLevel=storageLevel)
-    assert(ufac.getStorageLevel == storageLevel);
-    assert(ifac.getStorageLevel == storageLevel);
-  }
+  /*  storageLevel = StorageLevel.DISK_ONLY*/
+  /*  val (ufac,ifac) = NCG.trainPNCG(R,rank,maxIter=1,regParam=regParam,finalRDDStorageLevel=storageLevel)*/
+  /*  assert(ufac.getStorageLevel == storageLevel);*/
+  /*  assert(ifac.getStorageLevel == storageLevel);*/
+  /*}*/
 
   def testRMSE(
     rank: Int,

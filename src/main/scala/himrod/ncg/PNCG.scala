@@ -1859,8 +1859,10 @@ object NCG extends Logging {
         /*val m_inds = rand.shuffle(block.dstPtrs(i) until block.dstPtrs(i))*/
         var j = block.dstPtrs(i)
         var num_factors = 0
+        /*logStdout(s"block $j_b: $row,$j")*/
         while (j < block.dstPtrs(i + 1)) 
         {
+          /*logStdout(s"block $j_b: $row,$j")*/
           val encoded = block.dstEncodedIndices(j)
           val blockId = srcEncoder.blockId(encoded)
           if (blockId == j_b) {
@@ -1879,12 +1881,15 @@ object NCG extends Logging {
               }
             }
             // y := a*x + y 
-            blas.saxpy(rank,a,m_j,1,U_new(i),1)
-            blas.saxpy(rank,a,u_i,1,M_new(localIndex),1)
-            j += 1
-            num_factors += 1
+            if (a.isNaN) {
+              logStdout(s"FUCKING SHIT; a is nan")
+            } else {
+              blas.saxpy(rank,-a,m_j,1,U_new(i),1)
+              blas.saxpy(rank,-a,u_i,1,m_j,1)
+              num_factors += 1
+            }
           }
-          row += 1
+          j += 1
         // add \lambda * n * u_i
         /*val penaltyCoeff = {*/
           /*if (implicitPrefs) */
@@ -1900,6 +1905,7 @@ object NCG extends Logging {
         /*}*/
         /*i += 1*/
         }
+        row += 1
       }
       (U_new,(j_b,M_new))
     }
@@ -2634,7 +2640,7 @@ object NCG extends Logging {
       numUserBlocks: Int = 10,
       numItemBlocks: Int = 10,
       maxIter: Int = 10,
-      stepsize: Double = 0.1,
+      stepsize: Double = 1,
       regParam: Double = 1e-2,
       implicitPrefs: Boolean = false,
       alpha: Double = 1.0,
@@ -2725,33 +2731,7 @@ object NCG extends Logging {
 
     var gradItem = evalGradient(userFactors,itemFactors,userOutBlocks,itemInBlocks,rank,regParam,userLocalIndexEncoder,implicitPrefs,alpha)
     var gradUser = evalGradient(itemFactors,userFactors,itemOutBlocks,userInBlocks,rank,regParam,itemLocalIndexEncoder,implicitPrefs,alpha)
-    logStdout(s"ALS: 0: ${1/dof * math.sqrt(rddNORMSQR(gradUser) + rddNORMSQR(gradItem))}: ${costFunc((userFactors,itemFactors))}")
-    /*if (implicitPrefs) {*/
-    /*  for (iter <- 1 to maxIter) {*/
-    /*    userFactors.setName(s"userFactors-$iter").persist(intermediateRDDStorageLevel)*/
-    /*    val previousItemFactors = itemFactors*/
-    /*    itemFactors = computeFactors(userFactors, userOutBlocks, itemInBlocks, rank, regParam,*/
-    /*      userLocalIndexEncoder, implicitPrefs, alpha, solver)*/
-    /*    previousItemFactors.unpersist()*/
-    /*    itemFactors.setName(s"itemFactors-$iter").persist(intermediateRDDStorageLevel)*/
-    /*    // TODO: Generalize PeriodicGraphCheckpointer and use it here.*/
-    /*    if (shouldCheckpoint(iter)) {*/
-    /*      itemFactors.checkpoint() // itemFactors gets materialized in computeFactors.*/
-    /*    }*/
-    /*    val previousUserFactors = userFactors*/
-    /*    userFactors = computeFactors(itemFactors, itemOutBlocks, userInBlocks, rank, regParam,*/
-    /*      itemLocalIndexEncoder, implicitPrefs, alpha, solver)*/
-    /*    if (shouldCheckpoint(iter)) {*/
-    /*      deletePreviousCheckpointFile()*/
-    /*      previousCheckpointFile = itemFactors.getCheckpointFile*/
-    /*    }*/
-    /*    previousUserFactors.unpersist()*/
-
-    /*    gradItem = evalGradient(userFactors,itemFactors,userOutBlocks,itemInBlocks,rank,regParam,userLocalIndexEncoder,implicitPrefs,alpha)*/
-    /*    logStdout(s"ALS: $iter: ${1/dof * math.sqrt(rddNORMSQR(gradItem))}: ${costFunc((userFactors,itemFactors))}")*/
-    /*  }*/
-    /*} else {*/
-
+    logStdout(s"SGD: 0: ${1/dof * math.sqrt(rddNORMSQR(gradUser) + rddNORMSQR(gradItem))}: ${costFunc((userFactors,itemFactors))}")
     for (iter <- 1 to maxIter) {
       // loop over all partitions of the ratings matrix
 
@@ -2762,21 +2742,21 @@ object NCG extends Logging {
           .partitionBy(new ALSPartitioner(numUserBlocks))
 
         val (u,m) = DSGD(shuffledItemFactors,userFactors,userInBlocks,rank,regParam,
-          itemLocalIndexEncoder,implicitPrefs,alpha,stepsize)
+          itemLocalIndexEncoder,implicitPrefs,alpha,stepsize/math.sqrt(iter.toDouble))
          userFactors = u.cache
          itemFactors = m.cache
 
-        if (shouldCheckpoint(iter)) {
-          itemFactors.checkpoint()
-          itemFactors.count() // checkpoint item factors and cut lineage
-          deletePreviousCheckpointFile()
-          previousCheckpointFile = itemFactors.getCheckpointFile
-        }
-
-        gradItem = evalGradient(userFactors,itemFactors,userOutBlocks,itemInBlocks,rank,regParam,userLocalIndexEncoder,implicitPrefs,alpha)
-        gradUser = evalGradient(itemFactors,userFactors,itemOutBlocks,userInBlocks,rank,regParam,itemLocalIndexEncoder,implicitPrefs,alpha)
-        logStdout(s"ALS: $iter.$stratum: ${1/dof * math.sqrt(rddNORMSQR(gradUser)+rddNORMSQR(gradItem))}: ${costFunc((userFactors,itemFactors))}")
+        logStdout(s"ALS: $iter.$stratum: ${itemFactors.count}")
       }
+      if (shouldCheckpoint(iter)) {
+        itemFactors.checkpoint()
+        itemFactors.count() // checkpoint item factors and cut lineage
+        deletePreviousCheckpointFile()
+        previousCheckpointFile = itemFactors.getCheckpointFile
+      }
+      gradItem = evalGradient(userFactors,itemFactors,userOutBlocks,itemInBlocks,rank,regParam,userLocalIndexEncoder,implicitPrefs,alpha)
+      gradUser = evalGradient(itemFactors,userFactors,itemOutBlocks,userInBlocks,rank,regParam,itemLocalIndexEncoder,implicitPrefs,alpha)
+      logStdout(s"SGD: $iter: ${1/dof * math.sqrt(rddNORMSQR(gradUser)+rddNORMSQR(gradItem))}: ${costFunc((userFactors,itemFactors))}")
     }
     val userIdAndFactors = userInBlocks
       .mapValues(_.srcIds)
